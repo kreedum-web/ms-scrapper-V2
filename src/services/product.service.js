@@ -2,67 +2,57 @@ const Product = require("../models/product.model");
 const logger = require("../utils/logger");
 
 /**
- * Bulk insert/update product listing URLs.
+ * Save one batch of products using MongoDB bulkWrite.
  */
-async function saveProductListings(products) {
+async function saveProductBatch(products) {
   if (!products.length) {
     return {
-      inserted: 0,
-      updated: 0,
-      total: 0,
+      upsertedCount: 0,
+      modifiedCount: 0,
+      matchedCount: 0,
     };
   }
 
   const operations = products.map((product) => ({
     updateOne: {
-      filter: {
-        supplier: product.supplier,
-        url: product.url,
-      },
-      update: {
-        $set: {
-          supplier: product.supplier,
-          categorySlug: product.categorySlug,
-          categoryName: product.categoryName,
-          name: product.name,
-          slug: product.slug,
-          url: product.url,
-        },
-        $setOnInsert: {
-          status: "pending",
-          lastScrapedAt: null,
-          lastError: null,
-        },
-      },
+      filter: { url: product.url },
+      update: { $set: product },
       upsert: true,
     },
   }));
 
-  const result = await Product.bulkWrite(operations, {
-    ordered: false,
-  });
-
-  const inserted = result.upsertedCount || 0;
-  const updated = result.modifiedCount || 0;
+  const result = await Product.bulkWrite(operations);
 
   logger.info(
-    `💾 ${products.length} URLs processed | ${inserted} new | ${updated} updated`
+    `Batch Saved: ${result.upsertedCount} new | ${result.modifiedCount} updated`
   );
 
-  return {
-    inserted,
-    updated,
-    total: products.length,
-  };
+  return result;
 }
 
-async function getPendingProducts(limit = 100) {
-  return Product.find({ status: "pending" })
-    .limit(limit)
-    .lean();
+/**
+ * Wrapper used by the current scraper.
+ * (We'll replace this in Chapter 6.3.2B.)
+ */
+async function saveProducts(products) {
+  return saveProductBatch(products);
+}
+
+/**
+ * Load all existing products into a Map(url -> product)
+ * Used for stale/new product detection.
+ */
+async function getExistingProducts() {
+  const products = await Product.find(
+    {},
+    { url: 1, lastScrapedAt: 1 }
+  ).lean();
+
+  return new Map(products.map((product) => [product.url, product]));
 }
 
 module.exports = {
-  saveProductListings,
-  getPendingProducts,
+  saveProductBatch,
+  saveProducts,
+  getExistingProducts,
 };

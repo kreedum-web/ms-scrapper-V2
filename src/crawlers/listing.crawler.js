@@ -1,13 +1,17 @@
 const cheerio = require("cheerio");
+const pLimit = require("p-limit").default;
+
 const request = require("../utils/request");
+const scraperConfig = require("../config/scraper.config");
+const logger = require("../utils/logger");
+
+const pageLimit = pLimit(scraperConfig.pageConcurrency);
 
 function extractProductSlug(productUrl) {
   try {
     const url = new URL(productUrl);
 
-    const parts = url.pathname
-      .split("/")
-      .filter(Boolean);
+    const parts = url.pathname.split("/").filter(Boolean);
 
     const productIndex = parts.indexOf("product");
 
@@ -21,89 +25,128 @@ function extractProductSlug(productUrl) {
   }
 }
 
-async function fetchProductListings(category) {
-  let currentUrl = category.url;
-  let page = 1;
+async function getPaginationInfo(categoryUrl) {
+  const html = await request(categoryUrl);
+  const $ = cheerio.load(html);
+
+  let totalPages = 1;
+
+  $(".woocommerce-pagination .page-numbers").each((_, el) => {
+    const page = parseInt($(el).text().trim());
+
+    if (!isNaN(page) && page > totalPages) {
+      totalPages = page;
+    }
+  });
+
+  return { html, totalPages };
+}
+
+async function scrapeListingPage(category, pageUrl) {
+  const html = await request(pageUrl);
+  const $ = cheerio.load(html);
 
   const products = [];
-  const seenUrls = new Set();
 
-  while (currentUrl) {
-    console.log(`📄 Crawling Page ${page}: ${currentUrl}`);
-
-    const html = await request(currentUrl);
-    const $ = cheerio.load(html);
-
-    $("li.product").each((_, element) => {
-      const link = $(element)
-        .find("a.woocommerce-LoopProduct-link")
-        .first()
-        .attr("href");
-
-      const name = $(element)
-        .find("h2.woocommerce-loop-product__title")
-        .first()
-        .text()
-        .trim();
-
-      if (!link || !name) {
-        return;
-      }
-
-      let productUrl;
-
-      try {
-        productUrl = new URL(link, currentUrl).href;
-      } catch {
-        return;
-      }
-
-      productUrl = productUrl.split("#")[0];
-
-      if (seenUrls.has(productUrl)) {
-        return;
-      }
-
-      seenUrls.add(productUrl);
-
-      const slug = extractProductSlug(productUrl);
-
-      if (!slug) {
-        return;
-      }
-
-      products.push({
-        supplier: category.supplier,
-        categorySlug: category.slug,
-        categoryName: category.name,
-        name,
-        slug,
-        url: productUrl,
-      });
-    });
-
-    const nextPage = $("a.next.page-numbers")
-      .first()
+  $("li.product").each((_, element) => {
+    const link = $(element)
+      .find("a.woocommerce-LoopProduct-link")
       .attr("href");
 
-    if (!nextPage) {
-      break;
-    }
+    const name = $(element)
+      .find("h2.woocommerce-loop-product__title")
+      .text()
+      .trim();
 
-    const normalizedNextPage = new URL(
-      nextPage,
-      currentUrl
-    ).href;
+    if (!link || !name) return;
 
-    if (normalizedNextPage === currentUrl) {
-      break;
-    }
+    const url = new URL(link, pageUrl).href.split("#")[0];
+    const slug = extractProductSlug(url);
 
-    currentUrl = normalizedNextPage;
-    page += 1;
-  }
+    products.push({
+      supplier: category.supplier,
+      categorySlug: category.slug,
+      categoryName: category.name,
+      name,
+      slug,
+      url,
+    });
+  });
 
   return products;
+}
+
+async function fetchProductListings(category) {
+  logger.info(`📄 ${category.slug} | Discovering pages`);
+
+  const { html, totalPages } = await getPaginationInfo(category.url);
+
+  logger.info(`📚 ${category.slug} has ${totalPages} pages`);
+
+  const firstPageProducts = [];
+  const firstPageDom = cheerio.load(html);
+
+  firstPageDom("li.product").each((_, element) => {
+    const link = firstPageDom(element)
+      .find("a.woocommerce-LoopProduct-link")
+      .attr("href");
+
+    const name = firstPageDom(element)
+      .find("h2.woocommerce-loop-product__title")
+      .text()
+      .trim();
+
+    if (!link || !name) return;
+
+    const url = new URL(link, category.url).href.split("#")[0];
+    const slug = extractProductSlug(url);
+
+    firstPageProducts.push({
+      supplier: category.supplier,
+      categorySlug: category.slug,
+      categoryName: category.name,
+      name,
+      slug,
+      url,
+    });
+  });
+
+  const remainingPages = [];
+
+  for (let page = 2; page <= totalPages; page++) {
+    remainingPages.push(
+      `${category.url.replace(/\/$/, "")}/page/${page}/?`
+    );
+  }
+
+  const pageResults = await Promise.all(
+    remainingPages.map((pageUrl) =>
+      pageLimit(async () => {
+        logger.info(`📄 ${category.slug} | ${pageUrl}`);
+
+        try {
+          return await scrapeListingPage(category, pageUrl);
+        } catch (error) {
+          logger.error(`❌ Failed page: ${pageUrl}`);
+          return [];
+        }
+      })
+    )
+  );
+
+  const seen = new Set();
+  const allProducts = [];
+
+  [...firstPageProducts, ...pageResults.flat()].forEach((product) => {
+    if (seen.has(product.url)) return;
+
+    seen.add(product.url);
+    allProducts.push(product);
+  });
+
+  logger.info(`✔ ${category.slug} → ${allProducts.length} products`);
+
+  return allProducts;
 }
 
 module.exports = {

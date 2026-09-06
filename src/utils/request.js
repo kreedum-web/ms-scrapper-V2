@@ -9,7 +9,7 @@ const client = axios.create({
   headers: config.headers
 });
 
-const request = async (url, retries = config.retryAttempts) => {
+const request = async (url, retries = config.retryAttempts || 3) => {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       logger.info(`GET ${url}`);
