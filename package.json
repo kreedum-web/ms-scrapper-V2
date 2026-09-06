@@ -10,7 +10,8 @@
     "scrape": "node src/index.js --once",
     "categories": "node src/index.js --categories",
     "sync-images": "node src/scripts/sync-images.js",
-    "export-json": "node src/scripts/export-json.js"
+    "export-json": "node src/scripts/export-json.js",
+    "products": "node src/index.js --products"
   },
   "dependencies": {
     "axios": "^1.11.0",

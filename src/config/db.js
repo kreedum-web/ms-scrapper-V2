@@ -3,10 +3,12 @@ const dns = require("dns");
 const logger = require("../utils/logger");
 
 // Fix SRV lookup issue on Windows
+dns.setServers(["8.8.8.8", "1.1.1.1"]);
 dns.setDefaultResultOrder("ipv4first");
 
 async function connectDB() {
   try {
+    console.log("DB URI =", process.env.MONGODB_URI);
     await mongoose.connect(process.env.MONGODB_URI, {
       dbName: "kreedum_supplier_sync",
       serverSelectionTimeoutMS: 15000,

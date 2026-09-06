@@ -1,8 +1,11 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
+const request = require("../utils/request");
 
 async function fetchCategories(baseUrl) {
-  const { data } = await axios.get(baseUrl);
+  
+
+const data = await request(baseUrl);
 
   const $ = cheerio.load(data);
 

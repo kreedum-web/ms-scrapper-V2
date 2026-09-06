@@ -1,3 +1,4 @@
+require("dotenv").config();
 const connectDB = require("./config/db");
 const { fetchCategories } = require("./crawlers/category.crawler");
 const { saveCategories } = require("./services/category.service");
@@ -16,4 +17,9 @@ const { saveCategories } = require("./services/category.service");
 
     process.exit(0);
   }
+  if (process.argv.includes("--products")) {
+  await connectDB();
+  await syncProductListings();
+  process.exit(0);
+}
 })();
