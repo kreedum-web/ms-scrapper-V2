@@ -1,37 +1,32 @@
-// const cheerio = require("cheerio");
-// const request = require("../utils/request");
-
-// async function getPaginationInfo(categoryUrl) {
-//   let currentUrl = categoryUrl;
-//   let totalPages = 1;
-
-//   while (true) {
-//     const html = await request(currentUrl);
-//     const $ = cheerio.load(html);
-
-//     // Look for the "next page" button.
-//     const nextPage = $("a.next.page-numbers").attr("href");
-
-//     if (!nextPage) break;
-
-//     totalPages++;
-//     currentUrl = nextPage;
-//   }
-
-//   return { totalPages };
-// }
-
-// module.exports = { getPaginationInfo };
-
-
 const cheerio = require("cheerio");
 const request = require("../utils/request");
+
+function extractProductSlug(productUrl) {
+  try {
+    const url = new URL(productUrl);
+
+    const parts = url.pathname
+      .split("/")
+      .filter(Boolean);
+
+    const productIndex = parts.indexOf("product");
+
+    if (productIndex !== -1 && parts[productIndex + 1]) {
+      return parts[productIndex + 1];
+    }
+
+    return parts.at(-1) || "";
+  } catch {
+    return "";
+  }
+}
 
 async function fetchProductListings(category) {
   let currentUrl = category.url;
   let page = 1;
 
   const products = [];
+  const seenUrls = new Set();
 
   while (currentUrl) {
     console.log(`📄 Crawling Page ${page}: ${currentUrl}`);
@@ -39,42 +34,73 @@ async function fetchProductListings(category) {
     const html = await request(currentUrl);
     const $ = cheerio.load(html);
 
-    // Each product card
     $("li.product").each((_, element) => {
-      const productLink = $(element)
+      const link = $(element)
         .find("a.woocommerce-LoopProduct-link")
+        .first()
         .attr("href");
 
-      const productName = $(element)
+      const name = $(element)
         .find("h2.woocommerce-loop-product__title")
+        .first()
         .text()
         .trim();
 
-      if (!productLink || !productName) return;
+      if (!link || !name) {
+        return;
+      }
 
-      const slug = productLink
-        .split("/product/")[1]
-        ?.replace(/\/$/, "");
+      let productUrl;
+
+      try {
+        productUrl = new URL(link, currentUrl).href;
+      } catch {
+        return;
+      }
+
+      productUrl = productUrl.split("#")[0];
+
+      if (seenUrls.has(productUrl)) {
+        return;
+      }
+
+      seenUrls.add(productUrl);
+
+      const slug = extractProductSlug(productUrl);
+
+      if (!slug) {
+        return;
+      }
 
       products.push({
         supplier: category.supplier,
         categorySlug: category.slug,
         categoryName: category.name,
-        name: productName,
+        name,
         slug,
-        url: productLink,
+        url: productUrl,
       });
     });
 
-    // Find Next page
-    const nextPage = $("a.next.page-numbers").attr("href");
+    const nextPage = $("a.next.page-numbers")
+      .first()
+      .attr("href");
 
-    if (nextPage) {
-      currentUrl = nextPage;
-      page++;
-    } else {
-      currentUrl = null;
+    if (!nextPage) {
+      break;
     }
+
+    const normalizedNextPage = new URL(
+      nextPage,
+      currentUrl
+    ).href;
+
+    if (normalizedNextPage === currentUrl) {
+      break;
+    }
+
+    currentUrl = normalizedNextPage;
+    page += 1;
   }
 
   return products;

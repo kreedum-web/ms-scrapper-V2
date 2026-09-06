@@ -1,27 +1,38 @@
 const Category = require("../models/category.model");
+const logger = require("../utils/logger");
 
 async function saveCategories(categories) {
-  let inserted = 0;
-  let updated = 0;
+  if (!categories.length) return;
 
-  for (const category of categories) {
-    const result = await Category.updateOne(
-      { supplier: category.supplier, slug: category.slug },
-      { $set: category },
-      { upsert: true }
-    );
+  const operations = categories.map((category) => ({
+    updateOne: {
+      filter: {
+        supplier: category.supplier,
+        slug: category.slug,
+      },
+      update: { $set: category },
+      upsert: true,
+    },
+  }));
 
-    if (result.upsertedCount) inserted++;
-    else if (result.modifiedCount) updated++;
-  }
+  const result = await Category.bulkWrite(operations);
 
-  return {
-    inserted,
-    updated,
-    total: categories.length,
-  };
+  logger.info(`✅ Categories saved: ${categories.length}`);
+
+  return result;
+}
+
+async function getCategories(supplier = "metrosports") {
+  const categories = await Category.find({ supplier })
+    .sort({ name: 1 })
+    .lean();
+
+  logger.info(`📂 Loaded ${categories.length} categories from MongoDB`);
+
+  return categories;
 }
 
 module.exports = {
   saveCategories,
+  getCategories,
 };

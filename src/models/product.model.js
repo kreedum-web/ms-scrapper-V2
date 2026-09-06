@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const productSchema = new mongoose.Schema(
   {
+    // Source Info
     supplier: {
       type: String,
       required: true,
@@ -19,14 +20,18 @@ const productSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Listing Info
     name: {
       type: String,
       required: true,
+      trim: true,
     },
 
     slug: {
       type: String,
       required: true,
+      trim: true,
+      index: true,
     },
 
     url: {
@@ -36,6 +41,47 @@ const productSchema = new mongoose.Schema(
       index: true,
     },
 
+    // ---------- DETAIL DATA ----------
+
+    brand: String,
+
+    sku: String,
+
+    shortDescription: String,
+
+    descriptionHtml: String,
+
+    descriptionText: String,
+
+    specifications: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+
+    features: {
+      type: [String],
+      default: [],
+    },
+
+    images: {
+      type: [String],
+      default: [],
+    },
+
+    thumbnail: String,
+
+    mrp: Number,
+
+    sellingPrice: Number,
+
+    currency: {
+      type: String,
+      default: "INR",
+    },
+
+    
+    // ---------- SCRAPER ----------
+
     status: {
       type: String,
       enum: ["pending", "scraped", "failed"],
@@ -44,6 +90,8 @@ const productSchema = new mongoose.Schema(
     },
 
     lastScrapedAt: Date,
+
+    lastError: String,
   },
   {
     timestamps: true,

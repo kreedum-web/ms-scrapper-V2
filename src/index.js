@@ -1,25 +1,57 @@
 require("dotenv").config();
+const mongoose = require("mongoose");
 const connectDB = require("./config/db");
-const { fetchCategories } = require("./crawlers/category.crawler");
-const { saveCategories } = require("./services/category.service");
+const logger = require("./utils/logger");
 
-(async () => {
-  await connectDB();
+const {
+  fetchCategories,
+} = require("./crawlers/category.crawler");
 
-  if (process.argv.includes("--categories")) {
-    const categories = await fetchCategories(process.env.BASE_URL);
+const {
+  saveCategories,
+} = require("./services/category.service");
 
-    console.log(categories);
+// const {
+//   syncProductListings,
+// } = require("./services/product.service");
 
-    const result = await saveCategories(categories);
+const { syncListings } = require("./services/scraper.service");
 
-    console.log(result);
+async function main() {
+  try {
+    await connectDB();
 
-    process.exit(0);
-  }
-  if (process.argv.includes("--products")) {
-  await connectDB();
-  await syncProductListings();
-  process.exit(0);
+    const args = process.argv.slice(2);
+
+    if (args.includes("--categories")) {
+      logger.info("🚀 Running Category Crawl");
+
+      const categories = await fetchCategories(process.env.BASE_URL);
+      logger.info(`📂 Categories discovered: ${categories.length}`);
+
+      const result = await saveCategories(categories);
+      logger.info(`✅ Categories saved: ${result.total}`);
+      return;
+    }
+
+    // if (args.includes("--products")) {
+    //   logger.info("🚀 Running Product Listing Sync");
+    //   await syncProductListings();
+    //   return;
+    // }
+
+    if (args.includes("--products")) {
+  await syncListings();
+  return;
 }
-})();
+
+  } catch (error) {
+    logger.error(error.stack || error.message);
+    process.exitCode = 1;
+  } finally {
+    await mongoose.disconnect();
+    logger.info("👋 MongoDB Disconnected");
+  }
+}
+
+main();
