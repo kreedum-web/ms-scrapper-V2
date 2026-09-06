@@ -1,24 +1,23 @@
 const mongoose = require("mongoose");
+const dns = require("dns");
 const logger = require("../utils/logger");
 
-const connectDB = async () => {
-  try {
-    mongoose.set("strictQuery", true);
+// Fix SRV lookup issue on Windows
+dns.setDefaultResultOrder("ipv4first");
 
-    const conn = await mongoose.connect(process.env.MONGODB_URI, {
+async function connectDB() {
+  try {
+    await mongoose.connect(process.env.MONGODB_URI, {
       dbName: "kreedum_supplier_sync",
-      maxPoolSize: 10,
-      serverSelectionTimeoutMS: 15000
+      serverSelectionTimeoutMS: 15000,
     });
 
-    logger.info("✅ MongoDB Atlas Connected");
-    logger.info(`🌍 Database: ${conn.connection.name}`);
-    logger.info(`📦 Host: ${conn.connection.host}`);
+    logger.info("✅ MongoDB Connected");
   } catch (error) {
     logger.error("❌ MongoDB Connection Failed");
     logger.error(error.message);
     process.exit(1);
   }
-};
+}
 
 module.exports = connectDB;

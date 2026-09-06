@@ -1,44 +1,27 @@
-const fs = require("fs-extra");
-const path = require("path");
+const Category = require("../models/category.model");
 
-const crawlMenu = require("../crawlers/menu.crawler");
-const logger = require("../utils/logger");
+async function saveCategories(categories) {
+  let inserted = 0;
+  let updated = 0;
 
-const OUTPUT = path.join(
-  process.cwd(),
-  "data",
-  "categories.json"
-);
+  for (const category of categories) {
+    const result = await Category.updateOne(
+      { supplier: category.supplier, slug: category.slug },
+      { $set: category },
+      { upsert: true }
+    );
 
-const saveCategories = async () => {
-  const categories = await crawlMenu();
+    if (result.upsertedCount) inserted++;
+    else if (result.modifiedCount) updated++;
+  }
 
-  await fs.ensureDir(path.dirname(OUTPUT));
-
-  await fs.writeJSON(OUTPUT, categories, {
-    spaces: 2
-  });
-
-  let level1 = categories.length;
-  let level2 = 0;
-  let level3 = 0;
-
-  categories.forEach((cat) => {
-    level2 += cat.children.length;
-
-    cat.children.forEach((sub) => {
-      level3 += sub.children.length;
-    });
-  });
-
-  logger.info("📁 Categories saved.");
-  logger.info(`L1 : ${level1}`);
-  logger.info(`L2 : ${level2}`);
-  logger.info(`L3 : ${level3}`);
-
-  return categories;
-};
+  return {
+    inserted,
+    updated,
+    total: categories.length,
+  };
+}
 
 module.exports = {
-  saveCategories
+  saveCategories,
 };
