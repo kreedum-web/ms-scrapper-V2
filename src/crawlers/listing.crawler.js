@@ -31,15 +31,34 @@ async function getPaginationInfo(categoryUrl) {
 
   let totalPages = 1;
 
-  $(".woocommerce-pagination .page-numbers").each((_, el) => {
-    const page = parseInt($(el).text().trim());
+  // Read page numbers ONLY from pagination URLs.
+  $("nav.woocommerce-pagination a.page-numbers").each((_, el) => {
+    const href = $(el).attr("href");
 
-    if (!isNaN(page) && page > totalPages) {
-      totalPages = page;
+    if (!href) return;
+
+    const match = href.match(/\/page\/(\d+)\/?/);
+
+    if (match) {
+      const pageNumber = Number(match[1]);
+
+      if (pageNumber > totalPages) {
+        totalPages = pageNumber;
+      }
     }
   });
 
-  return { html, totalPages };
+  // Safety guard
+  if (totalPages > 50) {
+    logger.warn(
+      `⚠️ Suspicious pagination detected (${totalPages}) for ${categoryUrl}`
+    );
+  }
+
+  return {
+    html,
+    totalPages,
+  };
 }
 
 async function scrapeListingPage(category, pageUrl) {
@@ -122,7 +141,7 @@ async function fetchProductListings(category) {
   const pageResults = await Promise.all(
     remainingPages.map((pageUrl) =>
       pageLimit(async () => {
-        logger.info(`📄 ${category.slug} | ${pageUrl}`);
+        logger.info(`📄 ${category.slug} | Page ${page}`);
 
         try {
           return await scrapeListingPage(category, pageUrl);
@@ -144,11 +163,14 @@ async function fetchProductListings(category) {
     allProducts.push(product);
   });
 
-  logger.info(`✔ ${category.slug} → ${allProducts.length} products`);
+  if (allProducts.length === 0) {
+  logger.warn(`⚠️ ${category.slug} returned 0 products.`);
+}
 
   return allProducts;
 }
 
 module.exports = {
   fetchProductListings,
+  getPaginationInfo, // <-- export for testing
 };
