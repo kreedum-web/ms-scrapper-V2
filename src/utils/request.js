@@ -1,18 +1,7 @@
-const axios = require("axios");
-const logger = require("./logger");
-const config = require("../config/scraper.config");
-
-const delay = require("./delay");
-
-const client = axios.create({
-  timeout: 20000,
-  headers: config.headers
-});
-
 const request = async (url, retries = config.retryAttempts || 3) => {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      logger.info(`GET ${url}`);
+      logger.debug(`GET ${url}`);
 
       const response = await client.get(url);
 
@@ -20,15 +9,20 @@ const request = async (url, retries = config.retryAttempts || 3) => {
 
       return response.data;
     } catch (err) {
-      logger.error(
-        `Attempt ${attempt}/${retries} failed : ${url}`
+      logger.warn(
+        `Retry ${attempt}/${retries} → ${url}`
       );
 
-      if (attempt === retries) throw err;
+      if (attempt === retries) {
+        logger.error(`Request failed → ${url}`);
+        throw err;
+      }
 
       await delay(config.retryDelay);
     }
   }
 };
+
+
 
 module.exports = request;

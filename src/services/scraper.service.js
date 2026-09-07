@@ -28,7 +28,7 @@ async function syncListings() {
     getExistingProducts(),
   ]);
 
-  logger.info(`📂 Loaded ${categories.length} categories from MongoDB`);
+  // logger.info(`📂 Loaded ${categories.length} categories from MongoDB`);
 
   const productMap = new Map();
 
@@ -97,6 +97,16 @@ async function syncListings() {
   let updated = 0;
   let processed = 0;
 
+
+  const batchNumber = Math.floor(i / scraperConfig.batchSize) + 1;
+const totalBatches = Math.ceil(
+  productsToScrape.length / scraperConfig.batchSize
+);
+
+logger.info(
+  `📦 Batch ${batchNumber}/${totalBatches} • ${chunk.length} products`
+);
+
   for (
     let i = 0;
     i < productsToScrape.length;
@@ -113,10 +123,6 @@ async function syncListings() {
           productLimit(async () => {
             try {
               const details = await fetchProductDetails(product);
-
-              logger.info(
-                `✔ ${details.slug} ₹${details.sellingPrice ?? "-"}`
-              );
 
               return details;
             } catch (error) {
@@ -142,9 +148,13 @@ async function syncListings() {
     updated += result.modifiedCount;
     processed += detailedChunk.length;
 
-    logger.info(
-      `💾 Batch Saved (${processed}/${productsToScrape.length}) | +${result.upsertedCount} inserted | ${result.modifiedCount} updated`
-    );
+    const percent = Math.round(
+  (processed / productsToScrape.length) * 100
+);
+
+logger.info(
+  `💾 Batch ${batchNumber}/${totalBatches} saved • ${percent}% (${processed}/${productsToScrape.length}) • +${result.upsertedCount} inserted • ${result.modifiedCount} updated`
+);
   }
 
   // --------------------------------------

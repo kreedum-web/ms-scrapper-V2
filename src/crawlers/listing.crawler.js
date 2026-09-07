@@ -2,6 +2,7 @@ const cheerio = require("cheerio");
 const pLimit = require("p-limit").default;
 
 const request = require("../utils/request");
+console.log("request type:", typeof request);
 const scraperConfig = require("../config/scraper.config");
 const logger = require("../utils/logger");
 
@@ -96,11 +97,14 @@ async function scrapeListingPage(category, pageUrl) {
 }
 
 async function fetchProductListings(category) {
-  logger.info(`📄 ${category.slug} | Discovering pages`);
+  // logger.info(`📄 ${category.slug} | Discovering pages`);
+
 
   const { html, totalPages } = await getPaginationInfo(category.url);
+  logger.info(`📁 ${category.slug.padEnd(28)} | ${totalPages} pages`);
 
-  logger.info(`📚 ${category.slug} has ${totalPages} pages`);
+
+  // logger.info(`📚 ${category.slug} has ${totalPages} pages`);
 
   const firstPageProducts = [];
   const firstPageDom = cheerio.load(html);
@@ -139,12 +143,10 @@ async function fetchProductListings(category) {
   }
 
   const pageResults = await Promise.all(
-    remainingPages.map((pageUrl) =>
-      pageLimit(async () => {
-        logger.info(`📄 ${category.slug} | Page ${page}`);
-
-        try {
-          return await scrapeListingPage(category, pageUrl);
+   remainingPages.map((pageUrl) =>
+  pageLimit(async () => {
+    try {
+      return await scrapeListingPage(category, pageUrl);
         } catch (error) {
           logger.error(`❌ Failed page: ${pageUrl}`);
           return [];
@@ -166,7 +168,9 @@ async function fetchProductListings(category) {
   if (allProducts.length === 0) {
   logger.warn(`⚠️ ${category.slug} returned 0 products.`);
 }
-
+logger.info(
+  `✔ ${category.slug.padEnd(28)} | ${allProducts.length} products`
+);
   return allProducts;
 }
 
