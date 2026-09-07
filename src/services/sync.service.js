@@ -1,1 +1,70 @@
-module.exports={};
+const SyncRun = require("../models/SyncRun");
+
+/**
+ * Create a new sync run.
+ */
+async function startSyncRun(supplier) {
+  return SyncRun.create({
+    supplier,
+    status: "running",
+    startedAt: new Date(),
+  });
+}
+
+async function isSyncRunning(supplier) {
+  const runningSync = await SyncRun.findOne({
+    supplier,
+    status: "running",
+  }).lean();
+
+  return Boolean(runningSync);
+}
+
+/**
+ * Mark sync as completed.
+ */
+async function completeSyncRun(syncRunId, stats) {
+  const finishedAt = new Date();
+
+  const durationSeconds = Math.round(
+    (finishedAt - stats.startedAt) / 1000
+  );
+
+  return SyncRun.findByIdAndUpdate(
+    syncRunId,
+    {
+      status: "completed",
+      finishedAt,
+      durationSeconds,
+
+      categoriesScanned: stats.categoriesScanned,
+      listingsFound: stats.listingsFound,
+      productsScraped: stats.productsScraped,
+      productsSkipped: stats.productsSkipped,
+
+      inserted: stats.inserted,
+      updated: stats.updated,
+      failed: stats.failed,
+      removed: stats.removed || 0,
+    },
+    { new: true }
+  );
+}
+
+/**
+ * Mark sync as failed.
+ */
+async function failSyncRun(syncRunId, error) {
+  return SyncRun.findByIdAndUpdate(syncRunId, {
+    status: "failed",
+    finishedAt: new Date(),
+    notes: error.message,
+  });
+}
+
+module.exports = {
+  startSyncRun,
+  completeSyncRun,
+  failSyncRun,
+  isSyncRunning,
+};

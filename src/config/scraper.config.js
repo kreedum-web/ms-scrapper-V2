@@ -9,4 +9,10 @@ module.exports = {
 
   retryCount: Number(process.env.SCRAPER_RETRY_COUNT || 3),
   requestDelay: Number(process.env.REQUEST_DELAY_MS || 0),
+
+  schedulerEnabled:
+  process.env.SCHEDULER_ENABLED === "true",
+
+schedulerCron:
+  process.env.SCHEDULER_CRON || "0 2 * * *",
 };

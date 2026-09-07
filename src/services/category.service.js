@@ -27,7 +27,7 @@ async function getCategories(supplier = "metrosports") {
     .sort({ name: 1 })
     .lean();
 
-  logger.info(`📂 Loaded ${categories.length} categories from MongoDB`);
+  // logger.info(`📂 Loaded ${categories.length} categories from MongoDB`);
 
   return categories;
 }

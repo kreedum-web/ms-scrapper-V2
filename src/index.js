@@ -11,6 +11,9 @@ const {
   saveCategories,
 } = require("./services/category.service");
 
+const {
+  startDailyScheduler,
+} = require("./scheduler/daily.scheduler");
 // const {
 //   syncProductListings,
 // } = require("./services/product.service");
@@ -45,13 +48,24 @@ async function main() {
   return;
 }
 
+if (args.includes("--scheduler")) {
+  logger.info("🕒 Starting Daily Scheduler");
+
+  startDailyScheduler();
+
+  // Keep Node process alive.
+ return new Promise(() => {});}
+
   } catch (error) {
     logger.error(error.stack || error.message);
     process.exitCode = 1;
   } finally {
+  // Don't disconnect when scheduler is running.
+  if (!process.argv.includes("--scheduler")) {
     await mongoose.disconnect();
     logger.info("👋 MongoDB Disconnected");
   }
+}
 }
 
 main();
