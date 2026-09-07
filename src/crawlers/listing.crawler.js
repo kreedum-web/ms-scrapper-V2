@@ -2,7 +2,7 @@ const cheerio = require("cheerio");
 const pLimit = require("p-limit").default;
 
 const request = require("../utils/request");
-console.log("request type:", typeof request);
+
 const scraperConfig = require("../config/scraper.config");
 const logger = require("../utils/logger");
 
@@ -101,8 +101,9 @@ async function fetchProductListings(category) {
 
 
   const { html, totalPages } = await getPaginationInfo(category.url);
-  logger.info(`📁 ${category.slug.padEnd(28)} | ${totalPages} pages`);
-
+// logger.info(
+//   `✔ ${category.slug.padEnd(28)} ${String(allProducts.length).padStart(4)} products (${totalPages} pages)`
+// );
 
   // logger.info(`📚 ${category.slug} has ${totalPages} pages`);
 

@@ -17,6 +17,7 @@ const productLimit = pLimit(scraperConfig.concurrency);
 const categoryLimit = pLimit(scraperConfig.categoryConcurrency);
 
 async function syncListings() {
+  const startedAt = Date.now();
   logger.info("🚀 Running Full Product Sync");
   logger.info(`📂 Category Workers : ${scraperConfig.categoryConcurrency}`);
   logger.info(`🛒 Product Workers  : ${scraperConfig.concurrency}`);
@@ -46,7 +47,7 @@ async function syncListings() {
       categoryLimit(async () => {
         const listings = await fetchProductListings(category);
 
-        logger.info(`✔ ${category.slug} → ${listings.length} products`);
+        // logger.info(`✔ ${category.slug} → ${listings.length} products`);
 
         totalListings += listings.length;
 
@@ -97,14 +98,8 @@ async function syncListings() {
   let updated = 0;
   let processed = 0;
 
-
-  const batchNumber = Math.floor(i / scraperConfig.batchSize) + 1;
 const totalBatches = Math.ceil(
   productsToScrape.length / scraperConfig.batchSize
-);
-
-logger.info(
-  `📦 Batch ${batchNumber}/${totalBatches} • ${chunk.length} products`
 );
 
   for (
@@ -116,6 +111,13 @@ logger.info(
       i,
       i + scraperConfig.batchSize
     );
+
+    const batchNumber =
+  Math.floor(i / scraperConfig.batchSize) + 1;
+
+logger.info(
+  `📦 Batch ${batchNumber}/${totalBatches} • Scraping ${chunk.length} products...`
+);
 
     const detailedChunk = (
       await Promise.all(
@@ -144,9 +146,9 @@ logger.info(
 
     const result = await saveProductBatch(detailedChunk);
 
-    inserted += result.upsertedCount;
-    updated += result.modifiedCount;
-    processed += detailedChunk.length;
+    // inserted += result.upsertedCount;
+    // updated += result.modifiedCount;
+    // processed += detailedChunk.length;
 
     const percent = Math.round(
   (processed / productsToScrape.length) * 100
@@ -160,6 +162,12 @@ logger.info(
   // --------------------------------------
   // STEP 3: Summary
   // --------------------------------------
+
+  const duration = Math.round((Date.now() - startedAt) / 1000);
+
+logger.info(
+  `⏱ Duration        : ${Math.floor(duration / 60)}m ${duration % 60}s`
+);
   logger.info("====================================");
   logger.info("✅ PRODUCT SYNC COMPLETE");
   logger.info(`Categories       : ${categories.length}`);

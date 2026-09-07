@@ -10,11 +10,8 @@ if (!fs.existsSync(logDir)) {
 
 const consoleFormat = winston.format.combine(
   winston.format.colorize({ all: true }),
-  winston.format.timestamp({
-    format: "HH:mm:ss",
-  }),
-  winston.format.printf(({ timestamp, level, message }) => {
-    return `${timestamp} ${level} ${message}`;
+  winston.format.printf(({ level, message }) => {
+    return `${level} ${message}`;
   })
 );
 
