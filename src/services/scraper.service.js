@@ -15,7 +15,11 @@ const {
   startSyncRun,
   completeSyncRun,
   failSyncRun,
+  updateSyncProgress,
+  getRunningSync
 } = require("./sync.service");
+
+let completedCategories = 0;
 
 // Product detail workers
 const productLimit = pLimit(scraperConfig.concurrency);
@@ -28,9 +32,14 @@ async function syncListings() {
 
   logger.info("🚀 Running Full Product Sync");
 
-  const syncRun = await startSyncRun("metrosports");
+  let syncRun = await getRunningSync("metrosports");
 
-  logger.info(`📝 Sync Run: ${syncRun._id}`);
+if (syncRun) {
+  logger.warn(`♻️ Resuming Sync: ${syncRun._id}`);
+} else {
+  syncRun = await startSyncRun("metrosports");
+  logger.info(`📝 New Sync Run: ${syncRun._id}`);
+}
 
     let categories = [];
   let existingProducts = new Map();
@@ -38,9 +47,10 @@ async function syncListings() {
   let totalListings = 0;
   let totalSkipped = 0;
 
-  let inserted = 0;
-  let updated = 0;
-  let processed = 0;
+ let inserted = syncRun.inserted || 0;
+let updated = syncRun.updated || 0;
+let processed = syncRun.productsScraped || 0;
+  let completedCategories = 0;
 
   const STALE_HOURS = 24;
 const staleTime = Date.now() - STALE_HOURS * 60 * 60 * 1000;
@@ -57,16 +67,32 @@ const staleTime = Date.now() - STALE_HOURS * 60 * 60 * 1000;
       getExistingProducts(),
     ]);
 
+    await   updateSyncProgress(syncRun._id, {
+  totalCategories: categories.length,
+});
+
     logger.info(`📂 Loaded ${categories.length} categories from MongoDB`);
 
 const productMap = new Map();
+
+logger.info(`📚 Crawling Categories (${categories.length})`);
+logger.info("────────────────────────────────────");
 
 await Promise.all(
   categories.map((category) =>
     categoryLimit(async () => {
       const listings = await fetchProductListings(category);
 
+
+      completedCategories++;
       totalListings += listings.length;
+
+
+      await   updateSyncProgress(syncRun._id, {
+  completedCategories,
+  listingsFound: totalListings,
+  lastCategory: category.slug,
+});
 
       for (const product of listings) {
         if (productMap.has(product.url)) continue;
@@ -92,7 +118,24 @@ await Promise.all(
 // STEP 2: Collect products to scrape
 // --------------------------------------
 
-const productsToScrape = [...productMap.values()];
+const allProducts = [...productMap.values()];
+
+const resumeIndex = syncRun.productsScraped || 0;
+
+const productsToScrape = allProducts.slice(resumeIndex);
+
+if (resumeIndex > 0) {
+  logger.warn(
+    `♻️ Resuming from product ${resumeIndex}/${allProducts.length}`
+  );
+    logger.info(
+    `♻️ Remaining Products : ${productsToScrape.length}`
+  );
+
+}
+await   updateSyncProgress(syncRun._id, {
+  totalProducts: allProducts.length,
+});
 
 logger.info(`🆕 Products To Scrape : ${productsToScrape.length}`);
 logger.info(`⏭️ Products Skipped   : ${totalSkipped}`);
@@ -101,9 +144,9 @@ if (productsToScrape.length === 0) {
   logger.info("✅ Everything is already up-to-date.");
 } else {
 
-  const totalBatches = Math.ceil(
-    productsToScrape.length / scraperConfig.batchSize
-  );
+ const totalBatches = Math.ceil(
+  allProducts.length / scraperConfig.batchSize
+);
 
   for (
     let i = 0;
@@ -116,7 +159,7 @@ if (productsToScrape.length === 0) {
     );
 
     const batchNumber =
-      Math.floor(i / scraperConfig.batchSize) + 1;
+  Math.floor((resumeIndex + i) / scraperConfig.batchSize) + 1;
 
     logger.info(
       `📦 Batch ${batchNumber}/${totalBatches} • Scraping ${chunk.length} products...`
@@ -155,9 +198,24 @@ if (productsToScrape.length === 0) {
       (processed / productsToScrape.length) * 100
     );
 
-    logger.info(
-      `💾 Batch ${batchNumber}/${totalBatches} saved • ${percent}% (${processed}/${productsToScrape.length})`
-    );
+
+    const progressPercent = Math.round(
+(processed / allProducts.length) * 100);
+
+await   updateSyncProgress(syncRun._id, {
+  currentBatch: batchNumber,
+  totalBatches,
+  productsScraped: processed,
+  inserted,
+  updated,
+  progressPercent,
+  lastProductSlug:
+    detailedChunk[detailedChunk.length - 1]?.slug,
+});
+
+   logger.info(
+  `💾 Batch ${batchNumber}/${totalBatches} • ${progressPercent}% • ${processed}/${productsToScrape.length} products`
+);
   }
 }
 

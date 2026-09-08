@@ -5,7 +5,6 @@ const syncRunSchema = new mongoose.Schema(
     supplier: {
       type: String,
       required: true,
-      index: true,
     },
 
     status: {
@@ -14,15 +13,11 @@ const syncRunSchema = new mongoose.Schema(
       default: "running",
     },
 
-    startedAt: {
-      type: Date,
-      required: true,
-    },
-
+    startedAt: Date,
     finishedAt: Date,
-
     durationSeconds: Number,
 
+    // Listing stage
     categoriesScanned: {
       type: Number,
       default: 0,
@@ -33,6 +28,7 @@ const syncRunSchema = new mongoose.Schema(
       default: 0,
     },
 
+    // Product stage
     productsScraped: {
       type: Number,
       default: 0,
@@ -58,18 +54,46 @@ const syncRunSchema = new mongoose.Schema(
       default: 0,
     },
 
-    removed: {
+    // NEW — Live Progress Fields
+    totalCategories: {
       type: Number,
       default: 0,
     },
 
-    notes: String,
+    completedCategories: {
+      type: Number,
+      default: 0,
+    },
+
+    totalProducts: {
+      type: Number,
+      default: 0,
+    },
+
+    currentBatch: {
+      type: Number,
+      default: 0,
+    },
+
+    totalBatches: {
+      type: Number,
+      default: 0,
+    },
+
+    progressPercent: {
+      type: Number,
+      default: 0,
+    },
+
+    lastCategory: String,
+    lastProductSlug: String,
+
+    error: String,
   },
   {
     timestamps: true,
     collection: "sync_runs",
-  },
-  
+  }
 );
 
 module.exports = mongoose.model("SyncRun", syncRunSchema);

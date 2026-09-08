@@ -23,9 +23,11 @@ const request = async (
 
       return response.data;
     } catch (err) {
-      logger.warn(
-        `Retry attempt ${attempt}/${retries} failed → ${url}`
-      );
+      const slug = url.split("/").filter(Boolean).pop();
+
+logger.warn(
+  `Retry ${attempt}/${retries} • ${slug}`
+);
 
       if (attempt === retries) {
         logger.error(`Request failed → ${url}`);

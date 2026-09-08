@@ -20,6 +20,26 @@ async function isSyncRunning(supplier) {
   return Boolean(runningSync);
 }
 
+async function getRunningSync(supplier) {
+  return SyncRun.findOne({
+    supplier,
+    status: "running",
+  }).sort({ startedAt: -1 });
+}
+
+async function updateSyncProgress(syncRunId, updates) {
+  return SyncRun.findByIdAndUpdate(
+    syncRunId,
+    {
+      $set: {
+        ...updates,
+        updatedAt: new Date(), // heartbeat for live progress
+      },
+    },
+    { new: true }
+  );
+}
+
 /**
  * Mark sync as completed.
  */
@@ -62,9 +82,12 @@ async function failSyncRun(syncRunId, error) {
   });
 }
 
+
 module.exports = {
   startSyncRun,
   completeSyncRun,
   failSyncRun,
   isSyncRunning,
+  updateSyncProgress,
+  getRunningSync,
 };
