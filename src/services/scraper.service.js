@@ -9,6 +9,7 @@ const { fetchProductDetails } = require("../crawlers/product.crawler");
 const {
   saveProductBatch,
   getExistingProducts,
+  markRemovedProducts,
 } = require("./product.service");
 
 const {
@@ -19,7 +20,7 @@ const {
   getRunningSync
 } = require("./sync.service");
 
-let completedCategories = 0;
+
 
 // Product detail workers
 const productLimit = pLimit(scraperConfig.concurrency);
@@ -50,6 +51,9 @@ if (syncRun) {
  let inserted = syncRun.inserted || 0;
 let updated = syncRun.updated || 0;
 let processed = syncRun.productsScraped || 0;
+let removed =0;
+let reactivated=0;
+let failedProducts = 0;
   let completedCategories = 0;
 
   const STALE_HOURS = 24;
@@ -118,7 +122,13 @@ await Promise.all(
 // STEP 2: Collect products to scrape
 // --------------------------------------
 
-const allProducts = [...productMap.values()];
+// const allProducts = [...productMap.values()];
+
+const allProducts = [...productMap.values()].sort((a, b) =>
+  a.url.localeCompare(b.url)
+);
+
+const duplicateListings = totalListings - allProducts.length;
 
 const resumeIndex = syncRun.productsScraped || 0;
 
@@ -173,7 +183,7 @@ if (productsToScrape.length === 0) {
               return await fetchProductDetails(product);
             } catch (error) {
               logger.error(`❌ Failed: ${product.slug}`);
-
+               failedProducts++;
               return {
                 ...product,
                 status: "failed",
@@ -190,13 +200,11 @@ if (productsToScrape.length === 0) {
 
     const result = await saveProductBatch(detailedChunk);
 
+    reactivated += result.reactivated;
     inserted += result.upsertedCount;
     updated += result.modifiedCount;
     processed += detailedChunk.length;
 
-    const percent = Math.round(
-      (processed / productsToScrape.length) * 100
-    );
 
 
     const progressPercent = Math.round(
@@ -214,48 +222,99 @@ await   updateSyncProgress(syncRun._id, {
 });
 
    logger.info(
-  `💾 Batch ${batchNumber}/${totalBatches} • ${progressPercent}% • ${processed}/${productsToScrape.length} products`
+  `💾 Batch ${batchNumber}/${totalBatches} • ${progressPercent}% • ${processed}/${allProducts.length} products`
 );
   }
 }
 
-    // =====================================================
-    // KEEP ALL YOUR EXISTING SCRAPER CODE HERE
-    // (categories → listings → batching → saveProductBatch)
-    // =====================================================
+logger.info("🧹 Checking for removed products...");
 
-    await completeSyncRun(syncRun._id, {
-      startedAt,
+ removed = await markRemovedProducts(
+  productMap.keys(),
+  "metrosports"
+);
 
-      categoriesScanned: categories.length,
-      listingsFound: totalListings,
+logger.info(`🗑 Removed Products : ${removed}`);
 
-      productsScraped: processed,
-      productsSkipped: totalSkipped,
+const successRate =
+  allProducts.length === 0
+    ? 100
+    : Number(
+        (
+          ((processed - failedProducts) / allProducts.length) *
+          100
+        ).toFixed(2)
+      );
 
-      inserted,
-      updated,
-      failed: 0,
-    });
+let healthStatus = "healthy";
+
+if (failedProducts > 20) {
+  healthStatus = "warning";
+}
+
+if (successRate < 95) {
+  healthStatus = "failed";
+}
+
+ await completeSyncRun(syncRun._id, {
+  startedAt,
+
+  categoriesScanned: categories.length,
+  listingsFound: totalListings,
+
+  productsScraped: processed,
+  productsSkipped: totalSkipped,
+
+  inserted,
+  updated,
+  failed: failedProducts,
+  removed,
+  reactivated,
+
+  duplicateListings,
+  successRate,
+  healthStatus,
+});
 
     // --------------------------------------
     // STEP 3: Summary
     // --------------------------------------
     const duration = Math.round((Date.now() - startedAt) / 1000);
 
-    logger.info(
-      `⏱ Duration        : ${Math.floor(duration / 60)}m ${duration % 60}s`
-    );
+   logger.info("====================================");
+logger.info("✅ PRODUCT SYNC COMPLETE");
+logger.info("====================================");
 
-    logger.info("====================================");
-    logger.info("✅ PRODUCT SYNC COMPLETE");
-    logger.info(`Categories       : ${categories.length}`);
-    logger.info(`Listings Scanned : ${totalListings}`);
-    logger.info(`Products Scraped : ${processed}`);
-    logger.info(`Products Skipped : ${totalSkipped}`);
-    logger.info(`Inserted         : ${inserted}`);
-    logger.info(`Updated          : ${updated}`);
-    logger.info("====================================");
+logger.info(`Supplier         : MetroSports`);
+
+logger.info(
+  `Duration         : ${Math.floor(duration / 60)}m ${duration % 60}s`
+);
+
+logger.info("------------------------------------");
+
+logger.info(`Categories       : ${categories.length}`);
+logger.info(`Listings Found   : ${totalListings}`);
+logger.info(`Unique Products  : ${allProducts.length}`);
+logger.info(`Duplicates       : ${duplicateListings}`);
+
+logger.info("------------------------------------");
+
+logger.info(`Products Scraped : ${processed}`);
+logger.info(`Products Skipped : ${totalSkipped}`);
+
+logger.info(`Inserted         : ${inserted}`);
+logger.info(`Updated          : ${updated}`);
+logger.info(`Removed          : ${removed}`);
+logger.info(`Reactivated      : ${reactivated}`);
+logger.info(`Failed           : ${failedProducts}`);
+
+logger.info("------------------------------------");
+
+logger.info(`Success Rate     : ${successRate}%`);
+logger.info(`Health Status    : ${healthStatus.toUpperCase()}`);
+
+logger.info("====================================");
 
   } catch (error) {
     // Mark this sync run as failed in MongoDB

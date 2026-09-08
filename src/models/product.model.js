@@ -91,6 +91,17 @@ const productSchema = new mongoose.Schema(
 
     lastScrapedAt: Date,
 
+    status: {
+  type: String,
+  enum: ["active", "inactive"],
+  default: "active",
+},
+
+removedAt: {
+  type: Date,
+  default: null,
+},
+
     lastError: String,
   },
   {

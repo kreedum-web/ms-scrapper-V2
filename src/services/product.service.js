@@ -6,20 +6,43 @@ const logger = require("../utils/logger");
  */
 async function saveProductBatch(products) {
   if (!products.length) {
-    return {
+     return {
       upsertedCount: 0,
       modifiedCount: 0,
       matchedCount: 0,
+      reactivated: 0,
     };
   }
+
+  // Find products that were inactive before this sync
+  const urls = products.map((product) => product.url);
+
+  const reactivated = await Product.countDocuments({
+    supplier: "metrosports",
+    status: "inactive",
+    url: { $in: urls },
+  });
 
   const operations = products.map((product) => ({
     updateOne: {
       filter: { url: product.url },
-      update: { $set: product },
+      update: {
+        $set: {
+          ...product,
+
+          // Reactivate product if it exists again
+          status: "active",
+          removedAt: null,
+
+          lastScrapedAt: new Date(),
+        },
+      },
       upsert: true,
     },
   }));
+
+
+
 
   const result = await Product.bulkWrite(operations);
 
@@ -27,7 +50,12 @@ async function saveProductBatch(products) {
     `Batch Saved: ${result.upsertedCount} new | ${result.modifiedCount} updated`
   );
 
-  return result;
+  return {
+    upsertedCount: result.upsertedCount,
+    modifiedCount: result.modifiedCount,
+    matchedCount: result.matchedCount,
+    reactivated,
+  };
 }
 
 /**
@@ -44,15 +72,40 @@ async function saveProducts(products) {
  */
 async function getExistingProducts() {
   const products = await Product.find(
-    {},
-    { url: 1, lastScrapedAt: 1 }
+     {
+      url: 1,
+      lastScrapedAt: 1,
+      status: 1,
+      removedAt: 1,
+    }
   ).lean();
 
   return new Map(products.map((product) => [product.url, product]));
+}
+
+async function markRemovedProducts(liveUrls, supplier = "metrosports") {
+  const result = await Product.updateMany(
+    {
+      supplier,
+      status: "active",
+      url: {
+        $nin: [...liveUrls],
+      },
+    },
+    {
+      $set: {
+        status: "inactive",
+        removedAt: new Date(),
+      },
+    }
+  );
+
+  return result.modifiedCount;
 }
 
 module.exports = {
   saveProductBatch,
   saveProducts,
   getExistingProducts,
+  markRemovedProducts,
 };

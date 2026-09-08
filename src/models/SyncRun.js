@@ -49,10 +49,36 @@ const syncRunSchema = new mongoose.Schema(
       default: 0,
     },
 
-    failed: {
-      type: Number,
-      default: 0,
-    },
+   failed: {
+  type: Number,
+  default: 0,
+},
+
+removed: {
+  type: Number,
+  default: 0,
+},
+
+reactivated: {
+  type: Number,
+  default: 0,
+},
+
+duplicateListings: {
+  type: Number,
+  default: 0,
+},
+
+successRate: {
+  type: Number,
+  default: 0,
+},
+
+healthStatus: {
+  type: String,
+  enum: ["healthy", "warning", "failed"],
+  default: "healthy",
+},
 
     // NEW — Live Progress Fields
     totalCategories: {

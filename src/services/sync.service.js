@@ -66,6 +66,10 @@ async function completeSyncRun(syncRunId, stats) {
       updated: stats.updated,
       failed: stats.failed,
       removed: stats.removed || 0,
+      reactivated: stats.reactivated || 0,
+      duplicateListings: stats.duplicateListings || 0,
+      successRate: stats.successRate || 0,
+      healthStatus: stats.healthStatus || "healthy",
     },
     { new: true }
   );
