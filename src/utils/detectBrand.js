@@ -1,29 +1,10 @@
-const KNOWN_BRANDS = [
-  "Aerofit",
-  "USI",
-  "Anza",
-  "Cosco",
-  "Yonex",
-  "Nivia",
-  "Head",
-  "Li-Ning",
-  "Adidas",
-  "Nike",
-  "Puma",
-  "Reebok",
-  "Assault Fitness",
-  "Stag",
-  "Butterfly",
-  "Vector X",
-  "SG",
-  "SS"
-];
+const brandDictionary = require("../config/brandDictionary");
 
 function detectBrand(name = "") {
-  const productName = name.toLowerCase();
+  const title = name.toLowerCase();
 
-  for (const brand of KNOWN_BRANDS) {
-    if (productName.includes(brand.toLowerCase())) {
+  for (const [keyword, brand] of Object.entries(brandDictionary)) {
+    if (title.includes(keyword)) {
       return brand;
     }
   }

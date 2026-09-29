@@ -1,0 +1,21 @@
+module.exports = {
+  "aerofit": "Aerofit",
+  "assault": "Assault Fitness",
+  "usi": "USI",
+  "anza": "Anza",
+  "cosco": "Cosco",
+  "yonex": "Yonex",
+  "li-ning": "Li-Ning",
+  "lining": "Li-Ning",
+  "nivia": "Nivia",
+  "head": "Head",
+  "stag": "Stag",
+  "butterfly": "Butterfly",
+  "vector x": "Vector X",
+  "sg": "SG",
+  "ss": "SS",
+  "adidas": "Adidas",
+  "nike": "Nike",
+  "puma": "Puma",
+  "reebok": "Reebok"
+};

@@ -1,5 +1,6 @@
 const cheerio = require("cheerio");
 const request = require("../utils/request");
+const detectBrand = require("../utils/detectBrand");
 
 function cleanText(text = "") {
   return text.replace(/\s+/g, " ").trim();
