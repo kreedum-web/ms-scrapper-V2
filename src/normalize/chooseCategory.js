@@ -1,38 +1,59 @@
 /**
- * Pick ONE category for a product that Metro Sports lists in several.
+ * Decide which node of Metro's category tree a product belongs to.
  *
- * The listing crawl runs categories in parallel, so "first category seen"
- * changes from run to run and products jump between categories on the
- * website. This picks deterministically:
+ * Sources, most reliable first:
+ *   1. `postedIn`  — the category printed on the product page itself
+ *   2. listing pages the product appeared on (a parent page like
+ *      "Treadmills" also lists every commercial/domestic treadmill)
+ *   3. the category it already has in MongoDB
  *
- *   1. keep the product's current category if it is still listed there
- *      (stops products moving around between syncs)
- *   2. otherwise prefer the most specific category the backend knows
- *   3. tie-break alphabetically
+ * Within a source the DEEPEST node in the tree wins ("commercial-treadmill"
+ * beats "treadmill"). Ties keep the current category, then go alphabetical,
+ * so a product never jumps between categories from run to run.
  */
-const backendCategories = new Set(require("../config/backendCategories"));
 
-// Catch-all buckets: only used when nothing more specific exists.
-const GENERIC = new Set(["miscellaneous", "unique-items"]);
-
-function specificity(slug) {
-  let score = 0;
-  if (backendCategories.has(slug)) score += 100;
-  if (/^(commercial|semi-commercial|domestic)-/.test(slug)) score += 10;
-  if (GENERIC.has(slug)) score -= 50;
-  return score;
+/** "weights-bars/dumbbells" -> "dumbbells" (Metro nests some slugs in the URL). */
+function leafSlug(slug = "") {
+  return String(slug || "").replace(/\/+$/, "").split("/").pop();
 }
 
-function chooseCategory(categorySlugs = [], currentSlug = "") {
-  const unique = [...new Set(categorySlugs.filter(Boolean))];
-  if (!unique.length) return currentSlug || "";
+/**
+ * @param {object}   sources
+ * @param {string[]} sources.postedIn       categories on the product page
+ * @param {string[]} sources.listings       category pages the product was listed on
+ * @param {string}   sources.current        category already stored
+ * @param {Map<string, object>} tree        slug -> category node ({ level, path, ... })
+ * @returns {string} chosen slug ("" when nothing is known)
+ */
+function chooseCategory({ postedIn = [], listings = [], current = "" } = {}, tree) {
+  const currentLeaf = leafSlug(current);
 
-  if (currentSlug && unique.includes(currentSlug) && backendCategories.has(currentSlug)) {
-    return currentSlug;
-  }
+  const pick = (candidates) => {
+    const known = [...new Set(candidates.map(leafSlug).filter(Boolean))].filter((slug) =>
+      tree ? tree.has(slug) : true
+    );
+    if (!known.length) return "";
 
-  return unique.sort((a, b) => specificity(b) - specificity(a) || a.localeCompare(b))[0];
+    return known.sort((a, b) => {
+      const depth = (s) => (tree?.get(s)?.level || 0);
+      return (
+        depth(b) - depth(a) ||
+        (b === currentLeaf) - (a === currentLeaf) ||
+        a.localeCompare(b)
+      );
+    })[0];
+  };
+
+  return (
+    pick(postedIn) ||
+    pick(listings) ||
+    pick([currentLeaf]) ||
+    // Unknown to the tree: keep what we have so the issue shows up in dataIssues.
+    leafSlug(postedIn[0]) ||
+    leafSlug(listings[0]) ||
+    currentLeaf
+  );
 }
 
 module.exports = chooseCategory;
-module.exports.isBackendCategory = (slug) => backendCategories.has(slug);
+module.exports.leafSlug = leafSlug;

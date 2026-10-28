@@ -166,7 +166,8 @@ async function fetchProductListings(category) {
     allProducts.push(product);
   });
 
-  if (allProducts.length === 0) {
+  // Department pages (e.g. Cardio) usually have no product grid of their own.
+  if (allProducts.length === 0 && category.kind !== "department") {
   logger.warn(`⚠️ ${category.slug} returned 0 products.`);
 }
 logger.info(

@@ -61,7 +61,7 @@ const SMALL_WORDS = new Set(["a", "an", "and", "as", "at", "by", "for", "in", "o
 // Kept upper-case when title-casing an ALL-CAPS name.
 const ACRONYMS = new Set([
   "TT", "USI", "PVC", "EZ", "MMA", "TFT", "LED", "LCD", "PU", "NBR", "TPE", "EVA",
-  "HIIT", "XL", "XXL", "XS", "AC", "DC", "HP", "MB", "HE", "XP", "UV", "MS", "BT", "FID",
+  "HIIT", "XL", "XXL", "XS", "AC", "DC", "HP", "MB", "HE", "XP", "UV", "MS", "BT", "FID", "FTSM",
   "II", "III", "IV", "VI", "VII", "VIII", "IX", "XI", "XII",
 ]);
 

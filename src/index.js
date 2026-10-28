@@ -3,12 +3,10 @@ const mongoose = require("mongoose");
 const connectDB = require("./config/db");
 const logger = require("./utils/logger");
 
-const {
-  fetchCategories,
-} = require("./crawlers/category.crawler");
+const crawlMenu = require("./crawlers/menu.crawler");
 
 const {
-  saveCategories,
+  saveCategoryTree,
 } = require("./services/category.service");
 
 const {
@@ -29,11 +27,9 @@ async function main() {
     if (args.includes("--categories")) {
       logger.info("🚀 Running Category Crawl");
 
-      const categories = await fetchCategories(process.env.BASE_URL);
-      logger.info(`📂 Categories discovered: ${categories.length}`);
-
-      const result = await saveCategories(categories);
-      logger.info(`✅ Categories saved: ${result.total}`);
+      // Metro's full menu tree: departments, categories, sub-categories.
+      const nodes = await crawlMenu(process.env.BASE_URL);
+      await saveCategoryTree(nodes);
       return;
     }
 

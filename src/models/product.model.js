@@ -79,12 +79,30 @@ const productSchema = new mongoose.Schema(
       default: "INR",
     },
 
+    // Earlier URLs of this product (Metro renamed it and left a 301 redirect).
+    previousUrls: {
+      type: [String],
+      default: [],
+    },
+
     // ---------- NORMALIZATION ----------
     // Title exactly as Metro Sports shows it; `name` is the cleaned version.
     sourceName: String,
 
-    // Every category the product is listed in; `categorySlug` is the one chosen.
+    // Every category page the product is listed on; `categorySlug` is the one chosen.
     categorySlugs: {
+      type: [String],
+      default: [],
+    },
+
+    // Category printed on the product page itself ("Category: DUAL STATIONS").
+    postedIn: {
+      type: [String],
+      default: [],
+    },
+
+    // Slugs from department down to `categorySlug`, e.g. ["cardio", "treadmill", "commercial-treadmill"].
+    categoryPath: {
       type: [String],
       default: [],
     },

@@ -4,8 +4,10 @@
  *
  *   npm run normalize                 dry run against MongoDB: prints a report, changes nothing
  *   npm run normalize -- --apply      writes the cleaned fields back to MongoDB
- *   npm run normalize -- --file export.json --out cleaned.json
+ *   npm run normalize -- --file export.json --tree categories.json --out cleaned.json
  *                                     offline: read a mongoexport JSON array, write the cleaned array
+ *
+ * Run `npm run categories` first: products are placed in Metro's menu tree.
  *
  * A JSON report (counts + examples per issue) is written to
  * normalize-report.json in the current folder.
@@ -29,7 +31,7 @@ const option = (name) => {
 
 // Fields the normalizer owns; nothing else on the document is touched.
 const OWNED_FIELDS = [
-  "url", "name", "sourceName", "sku", "brand", "categorySlug", "categoryName",
+  "url", "name", "sourceName", "sku", "brand", "categorySlug", "categoryName", "categoryPath",
   "mrp", "sellingPrice", "currency", "descriptionHtml", "descriptionText",
   "features", "specifications", "images", "thumbnail",
   "dataIssues", "normalizerVersion", "normalizedAt",
@@ -123,9 +125,10 @@ function resolveSlugCollisions(pairs) {
   }
 }
 
-async function runOffline(file, outFile) {
+async function runOffline(file, outFile, treeFile) {
   const products = unwrapExtendedJson(JSON.parse(fs.readFileSync(file, "utf8")));
-  const pairs = products.map((before) => ({ before, after: normalizeProduct(before) }));
+  const categoryTree = treeFile ? unwrapExtendedJson(JSON.parse(fs.readFileSync(treeFile, "utf8"))) : undefined;
+  const pairs = products.map((before) => ({ before, after: normalizeProduct(before, { categoryTree }) }));
   resolveSlugCollisions(pairs);
 
   const report = buildReport(pairs);
@@ -148,15 +151,18 @@ async function runDatabase(apply) {
 
   await connectDB();
 
-  const [products, categories] = await Promise.all([
+  const [products, categoryTree] = await Promise.all([
     Product.find({ supplier: "metrosports" }).lean(),
-    Category.find({ supplier: "metrosports" }).lean(),
+    Category.find({ supplier: "metrosports", isActive: true }).lean(),
   ]);
-  const categoryNames = Object.fromEntries(categories.map((c) => [c.slug, c.name]));
+
+  if (!categoryTree.some((node) => node.level)) {
+    throw new Error("Category tree is missing. Run `npm run categories` first.");
+  }
 
   const pairs = products.map((before) => ({
     before,
-    after: normalizeProduct(before, { categoryNames }),
+    after: normalizeProduct(before, { categoryTree }),
   }));
   resolveSlugCollisions(pairs);
 
@@ -202,7 +208,7 @@ async function runDatabase(apply) {
 
 (async () => {
   const file = option("--file");
-  if (file) await runOffline(file, option("--out"));
+  if (file) await runOffline(file, option("--out"), option("--tree"));
   else await runDatabase(flag("--apply"));
 })().catch((error) => {
   console.error(error);

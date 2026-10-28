@@ -47,6 +47,19 @@ $("table.woocommerce-product-attributes tr").each((_, row) => {
 
   const sku = cleanText($(".sku").text()) || null;
 
+  // The product's own category as Metro Sports assigns it ("Category: DUAL STATIONS").
+  // Most reliable source: listing pages also show products of sub-categories.
+  const postedIn = [];
+
+  $(".product_meta .posted_in a").each((_, a) => {
+    const href = $(a).attr("href") || "";
+    const slug = href.replace(/\/+$/, "").split("/product-category/")[1]?.split("/").pop();
+
+    if (slug && !postedIn.includes(slug)) {
+      postedIn.push(slug);
+    }
+  });
+
   // ---------------- PRICE ----------------
 
   const mrp = parsePrice(
@@ -165,6 +178,7 @@ return {
   name,
   brand,
   sku,
+  postedIn,
   mrp,
   sellingPrice,
   descriptionHtml,

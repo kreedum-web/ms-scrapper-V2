@@ -79,7 +79,7 @@ test("prices: missing MRP filled, MRP never below selling price, strings parsed"
   const p = run({ mrp: "₹1,299.00", sellingPrice: "Rs 999" });
   assert.equal(p.mrp, 1299);
   assert.equal(p.sellingPrice, 999);
-  assert.ok(run({ mrp: null, sellingPrice: null }).dataIssues.includes("error:missing_price"));
+  assert.ok(run({ mrp: null, sellingPrice: null }).dataIssues.includes("warn:no_price"));
 });
 
 test("spec keys collapse to the backend's names; junk keys dropped", () => {
@@ -123,15 +123,59 @@ test("URLs are canonical", () => {
   );
 });
 
-test("unknown category is reported as an error", () => {
-  assert.ok(run({ categorySlug: "brand-new-category" }).dataIssues.includes("error:unmapped_category:brand-new-category"));
+// A slice of Metro's real menu tree.
+const node = (slug, path, name = slug) => ({ slug, path, level: path.length, name });
+const tree = [
+  node("cardio", ["cardio"], "Cardio"),
+  node("treadmill", ["cardio", "treadmill"], "Treadmills"),
+  node("commercial-treadmill", ["cardio", "treadmill", "commercial-treadmill"], "Commercial Treadmill"),
+  node("strength", ["strength"]),
+  node("benches-racks", ["strength", "benches-racks"]),
+  node("single-stations", ["strength", "single-stations"]),
+  node("weights-bars", ["weights-bars"]),
+  node("dumbbells", ["weights-bars", "dumbbells"], "Dumbbells"),
+  node("flooring", ["flooring"], "Flooring"),
+];
+const treeMap = new Map(tree.map((n) => [n.slug, n]));
+
+test("category in the menu tree gets its full path", () => {
+  const p = run({ categorySlug: "commercial-treadmill" }, { categoryTree: tree });
+  assert.deepEqual(p.categoryPath, ["cardio", "treadmill", "commercial-treadmill"]);
+  assert.equal(p.categoryName, "Commercial Treadmill");
 });
 
-test("category choice is deterministic and sticky", () => {
-  assert.equal(chooseCategory(["treadmill", "commercial-treadmill", "miscellaneous"]), "commercial-treadmill");
-  assert.equal(chooseCategory(["miscellaneous", "commercial-treadmill"]), "commercial-treadmill");
-  // keeps the category the product already has, if still listed there
-  assert.equal(chooseCategory(["benches-racks", "single-stations"], "single-stations"), "single-stations");
+test("category missing from the menu is reported as an error", () => {
+  const p = run({ categorySlug: "brand-new-category" }, { categoryTree: tree });
+  assert.ok(p.dataIssues.includes("error:category_not_in_menu:brand-new-category"));
+});
+
+test("the product page's own category wins over listing pages", () => {
+  const p = run(
+    { categorySlug: "treadmill", postedIn: ["commercial-treadmill"] },
+    { categoryTree: tree, categorySlugs: ["treadmill", "commercial-treadmill"], currentCategorySlug: undefined }
+  );
+  assert.equal(p.categorySlug, "commercial-treadmill");
+});
+
+test("nested Metro slugs map to the leaf ('weights-bars/dumbbells' -> 'dumbbells')", () => {
+  const p = run({ categorySlug: "weights-bars/dumbbells" }, { categoryTree: tree });
+  assert.equal(p.categorySlug, "dumbbells");
+  assert.deepEqual(p.categoryPath, ["weights-bars", "dumbbells"]);
+});
+
+test("department-level products (Flooring) are valid", () => {
+  const p = run({ categorySlug: "", postedIn: ["flooring"] }, { categoryTree: tree });
+  assert.deepEqual(p.categoryPath, ["flooring"]);
+  assert.ok(!p.dataIssues.some((i) => i.startsWith("error:")));
+});
+
+test("category choice: deepest wins, ties keep the current category", () => {
+  assert.equal(chooseCategory({ listings: ["treadmill", "commercial-treadmill"] }, treeMap), "commercial-treadmill");
+  assert.equal(
+    chooseCategory({ listings: ["benches-racks", "single-stations"], current: "single-stations" }, treeMap),
+    "single-stations"
+  );
+  assert.equal(chooseCategory({ listings: ["single-stations", "benches-racks"] }, treeMap), "benches-racks");
 });
 
 test("backendSlug matches the backend's slug rule", () => {
@@ -147,4 +191,30 @@ test("single ' I ' separator splits only between multi-word parts", () => {
 test("description heading glued to the text is removed", () => {
   assert.equal(run({ descriptionText: "SpecificationsDimension: 76\" (L)" }).descriptionText, 'Dimension: 76" (L)');
   assert.equal(run({ descriptionText: "Specifications• Tube Gauge : 3.0mm" }).descriptionText, "Tube Gauge : 3.0mm");
+});
+
+test("menu parser builds Metro's tree from the menu HTML", () => {
+  const { parseMenuTree } = require("../src/crawlers/menu.crawler");
+  const html = `<ul class="elementor-nav-menu">
+    <li><a href="/our-products/cardio/">Cardio</a><ul>
+      <li><a href="/product-category/treadmill/">Treadmills</a><ul>
+        <li><a href="/product-category/commercial-treadmill/">Commercial Treadmill</a></li></ul></li></ul></li>
+    <li><a href="/our-products/weights-bars/">Weights &amp; Bars</a><ul>
+      <li><a href="/product-category/weights-bars/dumbbells/">DUMBBELLS</a></li></ul></li>
+    <li><a href="/our-products/accessories/">Accessories</a><ul>
+      <li><a href="/product-category/balls/">BALLS</a></li>
+      <li><a href="#">OTHER ACCESSORIES</a><ul><li><a href="/product-category/jacket/">Jacket</a></li></ul></li></ul></li>
+    <li><a href="/our-products/flooring/">Flooring</a></li>
+    <li><a href="/store-locations/">Store Locations</a></li>
+  </ul>`;
+  const nodes = parseMenuTree(html, "https://metrosports.co.in/");
+  const bySlug = Object.fromEntries(nodes.map((n) => [n.slug, n]));
+
+  assert.deepEqual(bySlug["commercial-treadmill"].path, ["cardio", "treadmill", "commercial-treadmill"]);
+  assert.equal(bySlug.dumbbells.name, "Dumbbells");
+  assert.equal(bySlug.dumbbells.sourceSlug, "weights-bars/dumbbells");
+  assert.equal(bySlug["other-accessories"].kind, "group");
+  assert.deepEqual(bySlug.jacket.path, ["accessories", "other-accessories", "jacket"]);
+  assert.equal(bySlug.flooring.kind, "department");
+  assert.equal(bySlug["store-locations"], undefined);
 });

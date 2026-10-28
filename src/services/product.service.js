@@ -103,6 +103,62 @@ async function getExistingProducts(supplier = "metrosports") {
 }
 
 /**
+ * Products whose URL Metro Sports renamed: move the stored product to its new
+ * URL (keeping the old one in `previousUrls`) instead of creating a duplicate.
+ *
+ * Run after the listing crawl and BEFORE scraping product pages, so the
+ * scrape updates the existing document.
+ *
+ * @param {Map<string, object>} existingProducts  from getExistingProducts(); updated in place
+ * @param {Set<string>} liveUrls                   every product URL in the listing crawl
+ * @param {(url: string) => Promise<string|null>} resolveRedirect
+ * @param {(url: string) => string} canonical      URL formatter used for live URLs
+ * @returns {Promise<Array<{from: string, to: string}>>}
+ */
+async function relinkMovedProducts(existingProducts, liveUrls, resolveRedirect, canonical, concurrency = 5) {
+  const missing = [...existingProducts.values()].filter(
+    (product) => product.status !== "inactive" && !liveUrls.has(product.url)
+  );
+
+  const moves = [];
+  for (let i = 0; i < missing.length; i += concurrency) {
+    const results = await Promise.all(
+      missing.slice(i, i + concurrency).map(async (product) => {
+        const target = await resolveRedirect(product.url);
+        const to = target && canonical(target);
+        // Only relink to a live product that isn't already stored under its own URL.
+        if (to && to !== product.url && liveUrls.has(to) && !existingProducts.has(to)) {
+          return { from: product.url, to };
+        }
+        return null;
+      })
+    );
+    moves.push(...results.filter(Boolean));
+  }
+
+  if (!moves.length) return moves;
+
+  await Product.bulkWrite(
+    moves.map(({ from, to }) => ({
+      updateOne: {
+        filter: { url: from },
+        update: { $set: { url: to }, $addToSet: { previousUrls: from } },
+      },
+    })),
+    { ordered: false }
+  );
+
+  for (const { from, to } of moves) {
+    const product = existingProducts.get(from);
+    existingProducts.delete(from);
+    existingProducts.set(to, { ...product, url: to });
+  }
+
+  logger.info(`🔀 Relinked ${moves.length} products whose Metro URL changed`);
+  return moves;
+}
+
+/**
  * Mark products inactive when they no longer appear in any category listing.
  *
  * @param {Iterable<string>} liveUrls  EVERY product URL seen in this crawl,
@@ -145,5 +201,6 @@ module.exports = {
   saveProductBatch,
   saveProducts,
   getExistingProducts,
+  relinkMovedProducts,
   markRemovedProducts,
 };

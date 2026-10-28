@@ -3,7 +3,7 @@ const scraperConfig = require("../config/scraper.config");
 
 
 const logger = require("../utils/logger");
-const { getCategories } = require("./category.service");
+const { getCategories, getCategoryTree } = require("./category.service");
 const { fetchProductListings } = require("../crawlers/listing.crawler");
 const { fetchProductDetails } = require("../crawlers/product.crawler");
 const normalizeProduct = require("../normalize/normalizeProduct");
@@ -11,8 +11,10 @@ const { canonicalUrl } = normalizeProduct;
 const {
   saveProductBatch,
   getExistingProducts,
+  relinkMovedProducts,
   markRemovedProducts,
 } = require("./product.service");
+const resolveRedirect = require("../utils/resolveRedirect");
 
 const {
   startSyncRun,
@@ -89,9 +91,14 @@ const productCategories = new Map();
 // products Metro Sports has removed.
 const liveUrls = new Set();
 
-const categoryNames = Object.fromEntries(
-  categories.map((category) => [category.slug, category.name])
-);
+// Metro's full menu tree (incl. menu headings), used to place each product.
+const categoryTree = await getCategoryTree("metrosports");
+
+if (!categoryTree.some((node) => node.level)) {
+  throw new Error(
+    "Category tree is missing. Run `npm run categories` first so the sync knows Metro's menu."
+  );
+}
 
 logger.info(`📚 Crawling Categories (${categories.length})`);
 logger.info("────────────────────────────────────");
@@ -141,6 +148,12 @@ await Promise.all(
     })
   )
 );
+
+// --------------------------------------
+// STEP 1b: Products Metro moved to a new URL keep their identity
+// --------------------------------------
+
+await relinkMovedProducts(existingProducts, liveUrls, resolveRedirect, (url) => canonicalUrl(url) || url);
 
 // --------------------------------------
 // STEP 2: Collect products to scrape
@@ -213,7 +226,7 @@ if (productsToScrape.length === 0) {
               const normalized = normalizeProduct(detailed, {
                 categorySlugs,
                 currentCategorySlug: existingProducts.get(product.url)?.categorySlug,
-                categoryNames,
+                categoryTree,
               });
 
               const errors = normalized.dataIssues.filter((issue) =>

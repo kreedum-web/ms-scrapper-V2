@@ -7,7 +7,7 @@
  *   url            upsert key        -> canonical https URL, trailing slash, no query/hash
  *   name + sku     website slug      -> clean name, real SKU or ""
  *   brand          brand pages       -> one canonical spelling, resolved from several sources
- *   categorySlug   category tree     -> one deterministic slug from backend's categoryMap
+ *   categorySlug   category tree     -> the product's node in Metro's menu tree (+ categoryPath)
  *   mrp/sellingPrice  prices         -> positive numbers, mrp >= sellingPrice
  *   features       specs + highlights -> bullets, then "Key: Value" with canonical keys
  *   descriptionText  SEO description -> clean text, no supplier notes
@@ -235,14 +235,23 @@ function cleanImages(images = [], thumbnail) {
   return out;
 }
 
+// ---------------------------------------------------------------- CATEGORY TREE
+
+/** Accept the tree as an array of category nodes or a Map(slug -> node). */
+function toTreeMap(tree) {
+  if (!tree) return null;
+  if (tree instanceof Map) return tree;
+  return new Map(tree.map((node) => [node.slug, node]));
+}
+
 // ---------------------------------------------------------------- MAIN
 
 /**
  * @param {object} raw      product as scraped (or as stored in Mongo)
  * @param {object} options
- * @param {string[]} options.categorySlugs   every category the product was listed in
+ * @param {object[]|Map} options.categoryTree  Metro's category nodes (from the categories collection)
+ * @param {string[]} options.categorySlugs   every category page the product was listed on
  * @param {string}   options.currentCategorySlug  category it already has in Mongo
- * @param {Object<string,string>} options.categoryNames  slug -> display name
  */
 function normalizeProduct(raw, options = {}) {
   const issues = [];
@@ -276,19 +285,23 @@ function normalizeProduct(raw, options = {}) {
   if (brandedName !== name) fixed("name_brand_spelling");
   name = brandedName;
 
-  // ---- category
-  const categorySlugs = options.categorySlugs?.length ? options.categorySlugs : [raw.categorySlug];
+  // ---- category (one node of Metro's menu tree)
+  const tree = toTreeMap(options.categoryTree);
   // During a crawl, the scraper passes the category already stored in Mongo
   // (or undefined for a new product). In a backfill, keep what's stored.
   const currentCategorySlug =
     "currentCategorySlug" in options ? options.currentCategorySlug : raw.categorySlug;
-  const categorySlug = chooseCategory(categorySlugs, currentCategorySlug);
-  const categoryName = cleanLine(
-    options.categoryNames?.[categorySlug] ||
-      (categorySlug === raw.categorySlug ? raw.categoryName : "") ||
-      raw.categoryName ||
-      ""
+  const categorySlug = chooseCategory(
+    {
+      postedIn: raw.postedIn || [],
+      listings: options.categorySlugs || [],
+      current: currentCategorySlug,
+    },
+    tree
   );
+  const node = tree?.get(categorySlug);
+  const categoryName = cleanLine(node?.name || raw.categoryName || "");
+  const categoryPath = node?.path ? [...node.path] : [];
   if (categorySlug !== raw.categorySlug) fixed("category_chosen");
 
   // ---- prices
@@ -333,8 +346,9 @@ function normalizeProduct(raw, options = {}) {
   // ---- validation
   if (!name) issues.push("error:missing_name");
   if (!url) issues.push("error:missing_url");
-  if (!sellingPrice) issues.push("error:missing_price");
-  if (!chooseCategory.isBackendCategory(categorySlug)) issues.push(`error:unmapped_category:${categorySlug}`);
+  // Some Metro products have no price at all (price on request, e.g. flooring).
+  if (!sellingPrice) issues.push("warn:no_price");
+  if (tree && !node) issues.push(`error:category_not_in_menu:${categorySlug || "none"}`);
   if (!brand) issues.push("warn:no_brand");
   if (!sku) issues.push("warn:no_sku");
   if (!images.length) issues.push("warn:no_images");
@@ -349,6 +363,7 @@ function normalizeProduct(raw, options = {}) {
     brand,
     categorySlug,
     categoryName,
+    categoryPath,
     mrp,
     sellingPrice,
     currency: raw.currency || "INR",
