@@ -1,6 +1,6 @@
 const cheerio = require("cheerio");
 const request = require("../utils/request");
-const detectBrand = require("../utils/detectBrand");
+const { htmlToText } = require("../normalize/text");
 
 function cleanText(text = "") {
   return text.replace(/\s+/g, " ").trim();
@@ -42,12 +42,8 @@ $("table.woocommerce-product-attributes tr").each((_, row) => {
   }
 });
 
-if (!brand) {
-  const title = name.toLowerCase();
-
-  if (title.includes("aerofit")) brand = "Aerofit";
-  else if (title.includes("assault")) brand = "Assault Fitness";
-}
+// If the attribute table has no brand, normalizeProduct() resolves it from
+// the spec table, the product name and the SKU (see src/utils/detectBrand.js).
 
   const sku = cleanText($(".sku").text()) || null;
 
@@ -66,27 +62,48 @@ if (!brand) {
 
 
  // ---------- DESCRIPTION ----------
-const descriptionHtml =
-  $(".woocommerce-product-details__short-description").html()?.trim() || "";
+// Most products use the short description next to the price. About a third
+// only have content in the "Description" tab, so fall back to that.
+const shortDescription = $(".woocommerce-product-details__short-description").first();
+const descriptionTab = $("#tab-description, .woocommerce-Tabs-panel--description").first();
 
-const descriptionText = $(".woocommerce-product-details__short-description")
-  .text()
-  .replace(/\n+/g, "\n")
+const descriptionSource = shortDescription.text().trim()
+  ? shortDescription
+  : descriptionTab;
+
+// Spec tables are captured into `specifications` below; keep them out of the
+// description so their rows ("Brand", "Indicative Price"...) don't show up as text.
+const descriptionNode = descriptionSource.clone();
+descriptionNode.find("table, script, style").remove();
+
+const descriptionHtml = descriptionNode.html()?.trim() || "";
+
+// One line per paragraph / list item instead of gluing them together.
+const descriptionText = htmlToText(descriptionHtml)
   .replace(/[ \t]+/g, " ")
   .replace(/\n\s+/g, "\n")
+  .replace(/\n+/g, "\n")
   .trim();
 
 
   // ---------------- FEATURES ----------------
 const features = [];
 
-$(".woocommerce-product-details__short-description li").each((_, li) => {
-  const text = cleanText($(li).text());
+const collectFeatures = (container) => {
+  container.find("li").each((_, li) => {
+    const text = cleanText($(li).text());
 
-  if (text) {
-    features.push(text);
-  }
-});
+    if (text && !features.includes(text)) {
+      features.push(text);
+    }
+  });
+};
+
+collectFeatures(shortDescription);
+
+if (!features.length) {
+  collectFeatures(descriptionTab);
+}
 
 // ---------------- IMAGES ----------------
 const images = [];
@@ -143,6 +160,9 @@ if (Object.keys(specifications).length === 0) {
 }
 return {
   ...product,
+  // Title from the product page (was computed but never returned before,
+  // so the listing-card title was saved instead).
+  name,
   brand,
   sku,
   mrp,
@@ -153,7 +173,6 @@ return {
   images,
   thumbnail,
   specifications,
-  status: "scraped",
   lastScrapedAt: new Date(),
   lastError: null,
 };

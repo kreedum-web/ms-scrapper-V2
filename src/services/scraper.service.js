@@ -6,6 +6,8 @@ const logger = require("../utils/logger");
 const { getCategories } = require("./category.service");
 const { fetchProductListings } = require("../crawlers/listing.crawler");
 const { fetchProductDetails } = require("../crawlers/product.crawler");
+const normalizeProduct = require("../normalize/normalizeProduct");
+const { canonicalUrl } = normalizeProduct;
 const {
   saveProductBatch,
   getExistingProducts,
@@ -79,6 +81,18 @@ const staleTime = Date.now() - STALE_HOURS * 60 * 60 * 1000;
 
 const productMap = new Map();
 
+// url -> every category the product is listed in. A product can sit in
+// several categories; normalizeProduct() picks one deterministically.
+const productCategories = new Map();
+
+// Every product URL seen in this crawl (scraped or skipped). Used to detect
+// products Metro Sports has removed.
+const liveUrls = new Set();
+
+const categoryNames = Object.fromEntries(
+  categories.map((category) => [category.slug, category.name])
+);
+
 logger.info(`📚 Crawling Categories (${categories.length})`);
 logger.info("────────────────────────────────────");
 
@@ -98,7 +112,17 @@ await Promise.all(
   lastCategory: category.slug,
 });
 
-      for (const product of listings) {
+      for (const listing of listings) {
+        // Same URL format as stored in MongoDB (https, trailing slash, no query).
+        const product = { ...listing, url: canonicalUrl(listing.url) || listing.url };
+
+        liveUrls.add(product.url);
+
+        if (!productCategories.has(product.url)) {
+          productCategories.set(product.url, new Set());
+        }
+        productCategories.get(product.url).add(product.categorySlug);
+
         if (productMap.has(product.url)) continue;
 
         const existing = existingProducts.get(product.url);
@@ -180,15 +204,38 @@ if (productsToScrape.length === 0) {
         chunk.map((product) =>
           productLimit(async () => {
             try {
-              return await fetchProductDetails(product);
+              const detailed = await fetchProductDetails(product);
+
+              const categorySlugs = [
+                ...(productCategories.get(product.url) || [product.categorySlug]),
+              ].sort();
+
+              const normalized = normalizeProduct(detailed, {
+                categorySlugs,
+                currentCategorySlug: existingProducts.get(product.url)?.categorySlug,
+                categoryNames,
+              });
+
+              const errors = normalized.dataIssues.filter((issue) =>
+                issue.startsWith("error:")
+              );
+
+              if (errors.length) {
+                logger.warn(`⚠️ ${product.slug}: ${errors.join(", ")}`);
+              }
+
+              return {
+                ...detailed,
+                ...normalized,
+                categorySlugs,
+              };
             } catch (error) {
               logger.error(`❌ Failed: ${product.slug}`);
                failedProducts++;
               return {
-                ...product,
-                status: "failed",
+                url: product.url,
+                failed: true,
                 lastError: error.message,
-                lastScrapedAt: new Date(),
               };
             }
           })
@@ -230,7 +277,7 @@ await   updateSyncProgress(syncRun._id, {
 logger.info("🧹 Checking for removed products...");
 
  removed = await markRemovedProducts(
-  productMap.keys(),
+  liveUrls,
   "metrosports"
 );
 

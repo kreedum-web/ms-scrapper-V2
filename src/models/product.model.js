@@ -79,28 +79,44 @@ const productSchema = new mongoose.Schema(
       default: "INR",
     },
 
-    
-    // ---------- SCRAPER ----------
+    // ---------- NORMALIZATION ----------
+    // Title exactly as Metro Sports shows it; `name` is the cleaned version.
+    sourceName: String,
 
+    // Every category the product is listed in; `categorySlug` is the one chosen.
+    categorySlugs: {
+      type: [String],
+      default: [],
+    },
+
+    // "error:*" / "warn:*" / "fixed:*" codes from src/normalize/normalizeProduct.js.
+    // Find problem products with: { dataIssues: /^error:/ }
+    dataIssues: {
+      type: [String],
+      default: [],
+      index: true,
+    },
+
+    normalizerVersion: Number,
+
+    normalizedAt: Date,
+
+    // ---------- SCRAPER ----------
+    // The backend migration only reads products with status "active".
+    // (This key was declared twice before; Mongoose kept only this one.)
     status: {
       type: String,
-      enum: ["pending", "scraped", "failed"],
-      default: "pending",
+      enum: ["active", "inactive"],
+      default: "active",
       index: true,
     },
 
     lastScrapedAt: Date,
 
-    status: {
-  type: String,
-  enum: ["active", "inactive"],
-  default: "active",
-},
-
-removedAt: {
-  type: Date,
-  default: null,
-},
+    removedAt: {
+      type: Date,
+      default: null,
+    },
 
     lastError: String,
   },
