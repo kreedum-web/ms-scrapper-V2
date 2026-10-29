@@ -32,7 +32,7 @@ const option = (name) => {
 // Fields the normalizer owns; nothing else on the document is touched.
 const OWNED_FIELDS = [
   "url", "name", "sourceName", "sku", "brand", "categorySlug", "categoryName", "categoryPath",
-  "mrp", "sellingPrice", "currency", "descriptionHtml", "descriptionText",
+  "mrp", "sellingPrice", "currency", "descriptionHtml", "descriptionText", "shortDescription",
   "features", "specifications", "images", "thumbnail",
   "dataIssues", "normalizerVersion", "normalizedAt",
 ];

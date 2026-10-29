@@ -10,7 +10,9 @@
  *   categorySlug   category tree     -> the product's node in Metro's menu tree (+ categoryPath)
  *   mrp/sellingPrice  prices         -> positive numbers, mrp >= sellingPrice
  *   features       specs + highlights -> bullets, then "Key: Value" with canonical keys
- *   descriptionText  SEO description -> clean text, no supplier notes
+ *   description    -> product content only (no FAQ, Metro selling, phone, staff
+ *                     notes, HTML junk); spec lines moved to specs; shortDescription
+ *                     for listings / SEO (see cleanDescription.js)
  *   images/thumbnail                 -> absolute, de-duplicated
  *
  * Every product also gets `dataIssues`: "error:*" means the website will show
@@ -20,8 +22,9 @@
 const detectBrand = require("../utils/detectBrand");
 const chooseCategory = require("./chooseCategory");
 const skuFromName = require("./skuFromName");
+const cleanDescription = require("./cleanDescription");
 const { lookup: keyLookup, dropKeys } = require("../config/featureKeys");
-const { cleanLine, cleanBlock, fixAllCaps, stripInternalNotes, htmlToText } = require("./text");
+const { cleanLine, fixAllCaps } = require("./text");
 
 const NORMALIZER_VERSION = 1;
 
@@ -202,28 +205,6 @@ function buildFeatures({ features = [], specifications = {}, nameTail = [] }) {
 
 // ---------------------------------------------------------------- DESCRIPTION
 
-const SPEC_HEADING_TEXT = /^\s*specifications?\s*:?\s*(\n|$)/i;
-const SPEC_HEADING_HTML = /^\s*<p>\s*(<strong>|<b>)?\s*specifications?\s*:?\s*(<\/strong>|<\/b>)?\s*<\/p>/i;
-
-function cleanDescriptionText(text = "") {
-  let out = cleanBlock(text);
-  // "Specifications :Aerofit's new..." -> "Aerofit's new..."
-  // "SpecificationsDimension: ..." / "Specifications• ..." (heading glued to the text)
-  out = out
-    .replace(SPEC_HEADING_TEXT, "")
-    .replace(/^\s*specifications?\s*:\s*/i, "")
-    .replace(/^\s*specifications?(?=[A-Z•\-–])\s*[•\-–]?\s*/i, "");
-  return out.trim();
-}
-
-function cleanDescriptionHtml(html = "") {
-  return stripInternalNotes(String(html || ""))
-    .replace(SPEC_HEADING_HTML, "")
-    .replace(/<p>\s*(&nbsp;| )?\s*<\/p>/gi, "")
-    .trim();
-}
-
-
 // ---------------------------------------------------------------- IMAGES
 
 function cleanImages(images = [], thumbnail) {
@@ -329,16 +310,21 @@ function normalizeProduct(raw, options = {}) {
   }
 
   // ---- description
-  const descriptionHtml = cleanDescriptionHtml(raw.descriptionHtml);
-  let descriptionText = cleanDescriptionText(raw.descriptionText);
-  if (!descriptionText && descriptionHtml) {
-    descriptionText = cleanDescriptionText(htmlToText(descriptionHtml));
-    if (descriptionText) fixed("description_text_from_html");
+  // The HTML is the source; the text is rebuilt from the cleaned HTML so both match.
+  let description = cleanDescription(raw.descriptionHtml);
+  if (!description.html && raw.descriptionText) {
+    // No HTML stored: wrap the plain text as paragraphs and clean that.
+    const asHtml = String(raw.descriptionText)
+      .split(/\n+/)
+      .map((line) => `<p>${line.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</p>`)
+      .join("");
+    description = cleanDescription(asHtml);
   }
+  const { html: descriptionHtml, text: descriptionText, short: shortDescription } = description;
 
-  // ---- features & specs
+  // ---- features & specs (spec lines found in the description become specs)
   const { features, specifications } = buildFeatures({
-    features: raw.features,
+    features: [...(raw.features || []), ...description.specLines],
     specifications: raw.specifications,
     nameTail,
   });
@@ -379,6 +365,7 @@ function normalizeProduct(raw, options = {}) {
     currency: raw.currency || "INR",
     descriptionHtml,
     descriptionText,
+    shortDescription,
     features,
     specifications,
     images,

@@ -107,12 +107,11 @@ test("sentence bullets never contain ':' (the backend would read them as specs)"
 
 test("supplier [Intern: ...] notes are removed everywhere", () => {
   const p = run({
-    descriptionText: "Specifications :Great bench [Intern: copy from live page]",
-    descriptionHtml: "<p><strong>Specifications :</strong></p><p>Great bench [Intern: copy from live page]</p>",
+    descriptionHtml: "<p>Great bench [Intern: copy from live page] for home use.</p>",
     specifications: { Weight: "[Intern: copy from live page]" },
   });
-  assert.equal(p.descriptionText, "Great bench");
-  assert.equal(p.descriptionHtml, "<p>Great bench</p>");
+  assert.equal(p.descriptionHtml, "<p>Great bench for home use.</p>");
+  assert.equal(p.descriptionText, "Great bench for home use.");
   assert.equal(p.specifications.Weight, undefined);
 });
 
@@ -188,9 +187,44 @@ test("single ' I ' separator splits only between multi-word parts", () => {
   assert.equal(run({ name: "Type I Bench" }).name, "Type I Bench");
 });
 
-test("description heading glued to the text is removed", () => {
-  assert.equal(run({ descriptionText: "SpecificationsDimension: 76\" (L)" }).descriptionText, 'Dimension: 76" (L)');
-  assert.equal(run({ descriptionText: "Specifications• Tube Gauge : 3.0mm" }).descriptionText, "Tube Gauge : 3.0mm");
+test("description keeps product content and drops Metro's selling, FAQ and junk", () => {
+  const html = `
+    <p>The AF-106 is a durable <a href="https://metrosports.co.in/x/" style="color:red">hand grip</a>.</p>
+    <h2><span style="color:#000"><strong>Key Features</strong></span></h2>
+    <ul><li>Builds grip strength</li><li>Compact</li></ul>
+    <h3><strong>Specifications</strong></h3>
+    <ul><li>Max. User Weight: 120 kg</li></ul>
+    <p><strong>Display:</strong></p><p>LCD</p>
+    <h3><strong>Frequently Asked Questions</strong></h3>
+    <p><strong>Question: Can I adjust it?</strong></p><p><strong>Answer: </strong>No. Confirm from the live product page.</p>
+    <h4><strong>Why Buy from Metro Sports</strong></h4>
+    <p>Metro Sports is an authorized dealer since 2003.</p>
+    <p>Order the AF-106 today and call Metro Sports on +91-99889-99977.</p>
+    <form><input type="hidden" name="x"></form>`;
+  const p = run({ descriptionHtml: html, features: [] });
+
+  assert.equal(
+    p.descriptionHtml,
+    '<p>The AF-106 is a durable hand grip.</p><h3>Key Features</h3><ul><li>Builds grip strength</li><li>Compact</li></ul>'
+  );
+  assert.equal(p.descriptionText, "The AF-106 is a durable hand grip.\n\nKey Features\n\n• Builds grip strength\n• Compact");
+  assert.equal(p.shortDescription, "The AF-106 is a durable hand grip.");
+  // spec lines from the description become specifications
+  assert.equal(p.specifications["Max User Weight"], "120 kg");
+  assert.equal(p.specifications.Display, "LCD");
+});
+
+test("description: health-claim sections, plain-text titles and Metro page titles", () => {
+  const cleanDescription = require("../src/normalize/cleanDescription");
+  const r = cleanDescription(`
+    <p><strong>Aerofit KFRK-10 Dumbbell Rack | Buy Online at Metro Sports</strong></p>
+    <p>A sturdy rack for home gyms.</p>
+    <h2>Health Benefits of Using the Rack Daily</h2><p>Better posture.</p>
+    <h2>Lower Back Pain Relief</h2><p>Medical claim.</p>
+    <h2>Who is it For?</h2><ul><li>Home gyms</li></ul>
+    <p>Frequently Asked Questions</p><div class="sp-easy-accordion"><p>Is it heavy? Yes.</p></div>
+    <p>-Dimensions<br>48 x 20 in</p>`);
+  assert.equal(r.text, "A sturdy rack for home gyms.\n\nWho is it For?\n\n• Home gyms");
 });
 
 test("menu parser builds Metro's tree from the menu HTML", () => {
