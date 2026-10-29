@@ -6,3 +6,6 @@ dist/
 .DS_Store
 scraper-log.txt
 
+
+normalize-report.json
+products-run.log
