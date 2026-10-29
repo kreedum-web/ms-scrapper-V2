@@ -1,0 +1,791 @@
+diff --git a/README.md b/README.md
+index a080c5e..99029c2 100644
+--- a/README.md
++++ b/README.md
+@@ -13,11 +13,18 @@ before it is saved, so `kreedum_supplier_sync.products` always matches what
+ | `brand` | one canonical spelling, from spec table → name → `AF-` SKU (`src/config/brandDictionary.js`) |
+ | `sku` | Metro's SKU; if Metro has none, the model code from the name (`Aerofit AF-2952 …` → `AF-2952`); otherwise `""` (never `N/A`) |
+ | `categorySlug` | one slug from the backend's `categoryMap` (`src/config/backendCategories.js`), chosen deterministically when a product is in several categories |
+-| `mrp`, `sellingPrice` | positive numbers, `mrp >= sellingPrice` |
++| `mrp`, `sellingPrice` | positive numbers, `mrp >= sellingPrice`. For a product with options: the cheapest option in stock, and `maxPrice` the most expensive |
++| `options`, `variants` | products sold in several weights / sizes: `options` = `[{ name: "Weight", values: ["0.5 kg", "1 kg"] }]`, `variants` = one entry per combination with its own `sellingPrice`, `mrp`, `sku`, `inStock`, `image` and Metro's `variantId`. Empty for products without options. Raw WooCommerce data kept in `sourceOptions` |
+ | `features` | bullets, then `Key: Value` lines with canonical keys (`Max User Weight`, `Dimensions`, `Weight`, `Warranty`… in `src/config/featureKeys.js`) — the spec table is merged in here because the backend only reads `features` |
+ | `descriptionText/Html` | no `Specifications :` heading, no `[Intern: …]` supplier notes |
+ | `dataIssues` | `error:*` / `warn:*` / `fixed:*` codes. Find problems with `db.products.find({ dataIssues: /^error:/ })` |
+ 
++**Products with options** (dumbbells by weight, plates, bars, sizes…): read from the
++product page's WooCommerce variation data (`src/crawlers/variations.js`), or from
++Metro's public Store API when the page doesn't embed them. When the crawler learns
++something new, `SCRAPER_VERSION` in `src/crawlers/product.crawler.js` goes up and the
++next `npm run products` re-scrapes every product scraped by an older version.
++
+ **Products with no images** (Metro shows only its placeholder picture) are treated as discontinued: the sync never saves them, and an existing copy is marked inactive.
+ 
+ **Re-clean data that's already in MongoDB** (no re-scrape needed):
+diff --git a/src/crawlers/product.crawler.js b/src/crawlers/product.crawler.js
+index 3687add..c801758 100644
+--- a/src/crawlers/product.crawler.js
++++ b/src/crawlers/product.crawler.js
+@@ -1,6 +1,12 @@
+ const cheerio = require("cheerio");
+ const request = require("../utils/request");
+ const { htmlToText } = require("../normalize/text");
++const { parseVariations, fetchVariationsFromStoreApi } = require("./variations");
++const logger = require("../utils/logger");
++
++// Bump when the crawler starts reading something new from product pages:
++// products scraped by an older version are re-scraped on the next sync.
++const SCRAPER_VERSION = 2; // 2: product options (weight, size …) with their own prices
+ 
+ function cleanText(text = "") {
+   return text.replace(/\s+/g, " ").trim();
+@@ -62,15 +68,38 @@ $("table.woocommerce-product-attributes tr").each((_, row) => {
+ 
+   // ---------------- PRICE ----------------
+ 
++  // Only the product's own price box (<p class="price">). Related products
++  // further down the page have prices too; when Metro shows no price for
++  // this product (not for sale / price on request) we must not pick theirs.
++  const priceBox = $("p.price").first();
++
+   const mrp = parsePrice(
+-    $(".price del .amount").first().text()
++    priceBox.find("del .amount").first().text()
+   );
+ 
+   const sellingPrice = parsePrice(
+-    $(".price ins .amount").first().text() ||
+-      $(".price .amount").first().text()
++    priceBox.find("ins .amount").first().text() ||
++      priceBox.find(".amount").first().text()
+   );
+ 
++  // ---------------- OPTIONS ----------------
++  // Weight / size / … each with its own price. For these products the price
++  // above is only the cheapest option; normalizeProduct() sets the prices
++  // from the options.
++  const sourceOptions = parseVariations($);
++
++  if (sourceOptions && !sourceOptions.variations && sourceOptions.productId) {
++    try {
++      sourceOptions.variations = await fetchVariationsFromStoreApi(
++        product.url,
++        sourceOptions.productId,
++        sourceOptions.options
++      );
++    } catch (error) {
++      logger.warn(`Options not loaded for ${product.url}: ${error.message}`);
++    }
++  }
++
+  
+ 
+ 
+@@ -187,6 +216,8 @@ return {
+   images,
+   thumbnail,
+   specifications,
++  sourceOptions: sourceOptions || null,
++  scraperVersion: SCRAPER_VERSION,
+   lastScrapedAt: new Date(),
+   lastError: null,
+ };
+@@ -197,4 +228,5 @@ return {
+ 
+ module.exports = {
+   fetchProductDetails,
++  SCRAPER_VERSION,
+ };
+diff --git a/src/crawlers/variations.js b/src/crawlers/variations.js
+new file mode 100644
+index 0000000..81323ab
+--- /dev/null
++++ b/src/crawlers/variations.js
+@@ -0,0 +1,132 @@
++/**
++ * Product options ("variations" in WooCommerce) — e.g. a dumbbell sold in
++ * 0.5 kg … 6 kg, each weight with its own price.
++ *
++ * Metro Sports runs WooCommerce. A product with options has a
++ * <form class="variations_form"> whose `data-product_variations` attribute
++ * holds every combination as JSON (price, MRP, SKU, stock, photo), and a
++ * <table class="variations"> with one <select> per option giving the
++ * option's name ("Weight") and the readable label of each value ("0.5KG").
++ *
++ * With many combinations WooCommerce leaves `data-product_variations="false"`
++ * and loads them on demand; then we read them from WooCommerce's public
++ * Store API instead (see fetchVariationsFromStoreApi).
++ *
++ * Returns the raw data; src/normalize/normalizeVariants.js turns it into the
++ * shape the website uses.
++ */
++const request = require("../utils/request");
++
++/**
++ * @param {import("cheerio").CheerioAPI} $  product page
++ * @returns {{ productId: string, options: Array, variations: Array|null } | null}
++ *   null when the product has no options. `variations` is null when the page
++ *   didn't include them (too many); fetch them with fetchVariationsFromStoreApi.
++ */
++function parseVariations($) {
++  const form = $("form.variations_form").first();
++  if (!form.length) return null;
++
++  const productId = String(form.attr("data-product_id") || "");
++
++  // Option names and value labels, in the order Metro shows them.
++  const options = [];
++  form.find("table.variations select").each((_, select) => {
++    const $select = $(select);
++    const key = $select.attr("data-attribute_name") || $select.attr("name") || "";
++    if (!key) return;
++
++    const id = $select.attr("id");
++    const name =
++      (id && form.find(`label[for="${id}"]`).first().text().trim()) ||
++      key.replace(/^attribute_(pa_)?/, "").replace(/[-_]+/g, " ");
++
++    const values = [];
++    $select.find("option").each((__, option) => {
++      const value = $(option).attr("value");
++      if (value) values.push({ value, label: $(option).text().trim() || value });
++    });
++
++    options.push({ key, name, values });
++  });
++
++  if (!options.length) return null;
++
++  const raw = form.attr("data-product_variations");
++  let variations = null;
++
++  if (raw && raw !== "false") {
++    try {
++      // cheerio has already decoded the HTML entities in the attribute.
++      variations = JSON.parse(raw).map(fromWooVariation);
++    } catch {
++      variations = null;
++    }
++  }
++
++  return { productId, options, variations };
++}
++
++/** One entry of data-product_variations -> our raw variation. */
++function fromWooVariation(variation) {
++  return {
++    id: String(variation.variation_id),
++    attributes: variation.attributes || {},
++    sku: variation.sku || "",
++    sellingPrice: Number(variation.display_price) || 0,
++    mrp: Number(variation.display_regular_price) || 0,
++    inStock: variation.is_in_stock !== false && variation.is_purchasable !== false,
++    image: variation.image?.full_src || variation.image?.url || "",
++  };
++}
++
++/**
++ * Fallback for products whose page doesn't embed the variations.
++ * WooCommerce Store API (public, read-only):
++ *   /wp-json/wc/store/v1/products/<id>            -> variation ids + attributes
++ *   /wp-json/wc/store/v1/products/<variation id>  -> price, stock, image
++ * Prices there are in minor units (paise).
++ */
++async function fetchVariationsFromStoreApi(productUrl, productId, options) {
++  const origin = new URL(productUrl).origin;
++  const api = (id) => `${origin}/wp-json/wc/store/v1/products/${id}`;
++  // axios already parses JSON responses
++  const get = async (id) => {
++    const data = await request(api(id));
++    return typeof data === "string" ? JSON.parse(data) : data;
++  };
++
++  const parent = await get(productId);
++  const keyByName = new Map(options.map((o) => [o.name.toLowerCase(), o.key]));
++  const valueByLabel = new Map(
++    options.flatMap((o) => o.values.map((v) => [`${o.key}|${v.label.toLowerCase()}`, v.value]))
++  );
++
++  const variations = [];
++  for (const entry of parent.variations || []) {
++    const detail = await get(entry.id);
++    const minor = 10 ** (detail.prices?.currency_minor_unit ?? 2);
++
++    const attributes = {};
++    for (const attribute of entry.attributes || []) {
++      const key = keyByName.get(String(attribute.name).toLowerCase());
++      if (!key) continue;
++      const value = String(attribute.value || "");
++      attributes[key] = valueByLabel.get(`${key}|${value.toLowerCase()}`) || value;
++    }
++
++    variations.push({
++      id: String(entry.id),
++      attributes,
++      sku: detail.sku || "",
++      sellingPrice: Number(detail.prices?.price || 0) / minor,
++      mrp: Number(detail.prices?.regular_price || 0) / minor,
++      inStock: detail.is_in_stock !== false && detail.is_purchasable !== false,
++      image: detail.images?.[0]?.src || "",
++    });
++  }
++
++  return variations;
++}
++
++module.exports = { parseVariations, fetchVariationsFromStoreApi, fromWooVariation };
+diff --git a/src/models/product.model.js b/src/models/product.model.js
+index 1d9d720..4fbf422 100644
+--- a/src/models/product.model.js
++++ b/src/models/product.model.js
+@@ -74,11 +74,35 @@ const productSchema = new mongoose.Schema(
+ 
+     sellingPrice: Number,
+ 
++    // Highest option price ("₹649 – ₹4,799"); equals sellingPrice without options.
++    maxPrice: Number,
++
+     currency: {
+       type: String,
+       default: "INR",
+     },
+ 
++    // ---------- OPTIONS (weight, size …) ----------
++    // [{ name: "Weight", values: ["0.5 kg", "1 kg"] }]
++    options: {
++      type: [mongoose.Schema.Types.Mixed],
++      default: [],
++    },
++
++    // One per option combination, each with its own price:
++    // [{ variantId, options: { Weight: "1 kg" }, label, sku, mrp, sellingPrice, inStock, image }]
++    // variantId is Metro's variation id (stable across scrapes).
++    variants: {
++      type: [mongoose.Schema.Types.Mixed],
++      default: [],
++    },
++
++    // Options exactly as scraped from WooCommerce (re-normalized by `npm run normalize`).
++    sourceOptions: {
++      type: mongoose.Schema.Types.Mixed,
++      default: null,
++    },
++
+     // Earlier URLs of this product (Metro renamed it and left a 301 redirect).
+     previousUrls: {
+       type: [String],
+@@ -131,6 +155,9 @@ const productSchema = new mongoose.Schema(
+ 
+     lastScrapedAt: Date,
+ 
++    // Crawler version that scraped this product (see product.crawler.js).
++    scraperVersion: Number,
++
+     removedAt: {
+       type: Date,
+       default: null,
+diff --git a/src/normalize/normalizeProduct.js b/src/normalize/normalizeProduct.js
+index 93506fa..2e7907f 100644
+--- a/src/normalize/normalizeProduct.js
++++ b/src/normalize/normalizeProduct.js
+@@ -9,6 +9,8 @@
+  *   brand          brand pages       -> one canonical spelling, resolved from several sources
+  *   categorySlug   category tree     -> the product's node in Metro's menu tree (+ categoryPath)
+  *   mrp/sellingPrice  prices         -> positive numbers, mrp >= sellingPrice
++ *   options/variants  weight, size … -> each option with its own price; the
++ *                                      product price is the cheapest option
+  *   features       specs + highlights -> bullets, then "Key: Value" with canonical keys
+  *   description    -> product content only (no FAQ, Metro selling, phone, staff
+  *                     notes, HTML junk); spec lines moved to specs; shortDescription
+@@ -23,10 +25,12 @@ const detectBrand = require("../utils/detectBrand");
+ const chooseCategory = require("./chooseCategory");
+ const skuFromName = require("./skuFromName");
+ const cleanDescription = require("./cleanDescription");
++const normalizeVariants = require("./normalizeVariants");
++const { priceFromVariants } = normalizeVariants;
+ const { lookup: keyLookup, dropKeys } = require("../config/featureKeys");
+ const { cleanLine, fixAllCaps } = require("./text");
+ 
+-const NORMALIZER_VERSION = 1;
++const NORMALIZER_VERSION = 2; // 2: options / variants
+ 
+ // ---------------------------------------------------------------- URL
+ 
+@@ -309,6 +313,16 @@ function normalizeProduct(raw, options = {}) {
+     fixed("mrp_below_selling_price");
+   }
+ 
++  // ---- options (weight, size …): each has its own price
++  const { options: productOptions, variants, issues: variantIssues } = normalizeVariants(raw.sourceOptions);
++  issues.push(...variantIssues);
++  let maxPrice = sellingPrice;
++  const optionPrice = priceFromVariants(variants);
++  if (optionPrice) {
++    if (optionPrice.sellingPrice !== sellingPrice || optionPrice.mrp !== mrp) fixed("price_from_options");
++    ({ sellingPrice, mrp, maxPrice } = optionPrice);
++  }
++
+   // ---- description
+   // The HTML is the source; the text is rebuilt from the cleaned HTML so both match.
+   let description = cleanDescription(raw.descriptionHtml);
+@@ -362,6 +376,9 @@ function normalizeProduct(raw, options = {}) {
+     categoryPath,
+     mrp,
+     sellingPrice,
++    maxPrice: maxPrice || sellingPrice,
++    options: productOptions,
++    variants,
+     currency: raw.currency || "INR",
+     descriptionHtml,
+     descriptionText,
+diff --git a/src/normalize/normalizeVariants.js b/src/normalize/normalizeVariants.js
+new file mode 100644
+index 0000000..43b51f0
+--- /dev/null
++++ b/src/normalize/normalizeVariants.js
+@@ -0,0 +1,191 @@
++/**
++ * Turn the raw WooCommerce options of one product (src/crawlers/variations.js)
++ * into what the website sells:
++ *
++ *   options:  [{ name: "Weight", values: ["0.5 kg", "1 kg", …] }]
++ *   variants: [{ variantId: "7027", options: { Weight: "0.5 kg" }, label: "0.5 kg",
++ *                sku, mrp, sellingPrice, inStock, image }]
++ *
++ * `variantId` is Metro's variation id: stable across scrapes, so carts and
++ * orders that point at a variant keep working after the next sync.
++ *
++ * Pure function: no network, no database.
++ */
++const { cleanLine, ACRONYMS } = require("./text");
++
++// Clothing sizes stay upper-case: S, M, XL, XXL, 3XL …
++const SIZE = /^(\d?X{0,3}[SML]|\d?XL)$/i;
++
++const SMALL = new Set(["IN", "OF", "OR", "TO", "ON", "AT", "BY", "AND", "FOR", "WITH"]);
++
++/** "RED" -> "Red", "1 PAIR" -> "1 Pair", "SIZE IN INCH" -> "Size in Inch"; "XL", "PU", "PVC" stay. */
++function titleCaseCaps(text) {
++  return text.replace(/[A-Za-z]+/g, (word, offset) => {
++    if (word !== word.toUpperCase() || SIZE.test(word) || ACRONYMS.has(word)) return word;
++    if (SMALL.has(word)) return offset === 0 ? word.charAt(0) + word.slice(1).toLowerCase() : word.toLowerCase();
++    return word.length >= 3 ? word.charAt(0) + word.slice(1).toLowerCase() : word;
++  });
++}
++
++const toPrice = (value) => {
++  const n = Number(value);
++  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
++};
++
++/** "0.5KG" -> "0.5 kg", "10KG X 1 PAIR" -> "10 kg x 1 Pair", "LARGE" -> "Large". */
++function cleanValueLabel(label = "") {
++  let text = cleanLine(label);
++  text = text.replace(/(\d)\s*(kgs?|kilograms?)\b\.?/gi, "$1 kg");
++  text = text.replace(/(\d)\s*(lbs?|pounds?)\b\.?/gi, "$1 lb");
++  text = text.replace(/(\d)\s*(mtrs?|meters?|metres?)\b\.?/gi, "$1 m");
++  text = text.replace(/(\d)\s*cms\b\.?/gi, "$1 cm");
++  text = text.replace(/(\d)\s*(mm|cm|ft|m|oz)\b/gi, (_, d, unit) => `${d} ${unit.toLowerCase()}`);
++  text = text.replace(/\b(\d+)\.0+(?= (kg|lb|m|cm|mm|ft)\b)/g, "$1"); // "1.0 kg" -> "1 kg"
++  text = text.replace(/(\S)\s+[xX×]\s+(?=\d)/g, "$1 x "); // "10 kg X 1 pair"
++  text = titleCaseCaps(text);
++  return text;
++}
++
++/** "size-38mm" -> "Size 38mm", "SIZE IN INCH" -> "Size In Inch", "COLOUR" -> "Colour". */
++function cleanOptionName(name = "") {
++  let text = cleanLine(name).replace(/[:*]+$/, "").replace(/[-_]+/g, " ").trim();
++  if (!text) return "Option";
++  text = text.replace(/(\d)\s*(MM|CM|KG)\b/g, (_, d, unit) => `${d}${unit.toLowerCase()}`);
++  text = titleCaseCaps(text);
++  return text.charAt(0).toUpperCase() + text.slice(1);
++}
++
++// Clothing / glove sizes, smallest first.
++const SIZE_ORDER = [
++  ["xxs"], ["xs", "extra small"], ["s", "small"], ["m", "medium"], ["l", "large"],
++  ["xl", "extra large"], ["xxl", "2xl", "extra extra large"], ["xxxl", "3xl"],
++];
++const sizeRank = (label) => SIZE_ORDER.findIndex((names) => names.includes(String(label).trim().toLowerCase()));
++
++/**
++ * Metro lists values alphabetically (10, 12.5, 2.5 … / Extra Large, Large,
++ * Medium, Small). Put weights and lengths in number order and clothing
++ * sizes from small to large; anything else keeps Metro's order.
++ */
++function sortValues(values) {
++  if (values.every((v) => sizeRank(v.label) !== -1)) {
++    return [...values].sort((a, b) => sizeRank(a.label) - sizeRank(b.label));
++  }
++  const number = (label) => parseFloat(String(label).replace(/,/g, ""));
++  if (!values.every((v) => Number.isFinite(number(v.label)))) return values;
++  return [...values].sort((a, b) => number(a.label) - number(b.label));
++}
++
++/**
++ * @param {{ options: Array, variations: Array|null } | null} raw
++ * @returns {{ options: Array, variants: Array, issues: string[] }}
++ */
++function normalizeVariants(raw) {
++  const issues = [];
++  if (!raw || !raw.options?.length) return { options: [], variants: [], issues };
++
++  if (!Array.isArray(raw.variations) || !raw.variations.length) {
++    issues.push("warn:options_without_prices");
++    return { options: [], variants: [], issues };
++  }
++
++  // Option names and value labels, keyed by WooCommerce's attribute key / value slug.
++  const options = raw.options.map((option) => ({
++    key: option.key,
++    name: cleanOptionName(option.name),
++    values: sortValues(option.values.map((v) => ({ value: v.value, label: cleanValueLabel(v.label) }))),
++  }));
++
++  const variants = [];
++  const seen = new Set();
++
++  for (const variation of raw.variations) {
++    // WooCommerce allows "any value" for an option (empty string): one entry
++    // per value, all at the same price.
++    let combos = [{}];
++    for (const option of options) {
++      const chosen = variation.attributes?.[option.key];
++      const values = chosen
++        ? [option.values.find((v) => v.value === chosen) || { value: chosen, label: cleanValueLabel(chosen) }]
++        : option.values;
++      combos = combos.flatMap((combo) => values.map((v) => ({ ...combo, [option.name]: v.label })));
++    }
++
++    let sellingPrice = toPrice(variation.sellingPrice);
++    let mrp = toPrice(variation.mrp);
++    if (!sellingPrice) {
++      issues.push("warn:option_without_price");
++      continue;
++    }
++    if (!mrp || mrp < sellingPrice) mrp = sellingPrice;
++
++    combos.forEach((combo, index) => {
++      const signature = JSON.stringify(combo);
++      if (seen.has(signature)) return; // a more specific variation came first
++      seen.add(signature);
++
++      variants.push({
++        // "any value" expansions share one Metro variation; keep their ids unique.
++        variantId: combos.length > 1 ? `${variation.id}-${index + 1}` : String(variation.id),
++        options: combo,
++        label: options.map((o) => combo[o.name]).filter(Boolean).join(" / "),
++        sku: cleanLine(variation.sku || ""),
++        mrp,
++        sellingPrice,
++        inStock: variation.inStock !== false,
++        image: variation.image || "",
++      });
++    });
++  }
++
++  if (!variants.length) {
++    issues.push("warn:options_without_prices");
++    return { options: [], variants: [], issues };
++  }
++
++  // Show options in Metro's order: 0.5 kg, 1 kg, 2 kg …
++  const rank = (variant) =>
++    options.map((o) => {
++      const i = o.values.findIndex((v) => v.label === variant.options[o.name]);
++      return i === -1 ? 999 : i;
++    });
++  variants.sort((a, b) => {
++    const ra = rank(a);
++    const rb = rank(b);
++    for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return ra[i] - rb[i];
++    return 0;
++  });
++
++  // Only values that some variant actually sells.
++  const outOptions = options
++    .map((o) => ({
++      name: o.name,
++      values: [...new Set(o.values.map((v) => v.label))].filter((label) =>
++        variants.some((variant) => variant.options[o.name] === label)
++      ),
++    }))
++    .filter((o) => o.values.length);
++
++  return { options: outOptions, variants, issues };
++}
++
++/**
++ * The product's listing price when it has options: the cheapest option
++ * (preferring ones in stock), with that option's own MRP, plus the highest
++ * price for "₹649 – ₹4,799".
++ */
++function priceFromVariants(variants) {
++  if (!variants?.length) return null;
++  const pool = variants.some((v) => v.inStock) ? variants.filter((v) => v.inStock) : variants;
++  const cheapest = pool.reduce((min, v) => (v.sellingPrice < min.sellingPrice ? v : min), pool[0]);
++  return {
++    sellingPrice: cheapest.sellingPrice,
++    mrp: cheapest.mrp,
++    maxPrice: Math.max(...variants.map((v) => v.sellingPrice)),
++  };
++}
++
++module.exports = normalizeVariants;
++module.exports.priceFromVariants = priceFromVariants;
++module.exports.cleanValueLabel = cleanValueLabel;
++module.exports.cleanOptionName = cleanOptionName;
+diff --git a/src/normalize/text.js b/src/normalize/text.js
+index 706effd..670a481 100644
+--- a/src/normalize/text.js
++++ b/src/normalize/text.js
+@@ -122,4 +122,5 @@ module.exports = {
+   cleanLine,
+   cleanBlock,
+   fixAllCaps,
++  ACRONYMS,
+ };
+diff --git a/src/scripts/normalize-existing.js b/src/scripts/normalize-existing.js
+index 2b70799..622b01c 100644
+--- a/src/scripts/normalize-existing.js
++++ b/src/scripts/normalize-existing.js
+@@ -32,7 +32,7 @@ const option = (name) => {
+ // Fields the normalizer owns; nothing else on the document is touched.
+ const OWNED_FIELDS = [
+   "url", "name", "sourceName", "sku", "brand", "categorySlug", "categoryName", "categoryPath",
+-  "mrp", "sellingPrice", "currency", "descriptionHtml", "descriptionText", "shortDescription",
++  "mrp", "sellingPrice", "maxPrice", "options", "variants", "currency", "descriptionHtml", "descriptionText", "shortDescription",
+   "features", "specifications", "images", "thumbnail",
+   "dataIssues", "normalizerVersion", "normalizedAt",
+ ];
+diff --git a/src/services/product.service.js b/src/services/product.service.js
+index 10d9564..1f3f7b4 100644
+--- a/src/services/product.service.js
++++ b/src/services/product.service.js
+@@ -113,6 +113,7 @@ async function getExistingProducts(supplier = "metrosports") {
+       removedAt: 1,
+       categorySlug: 1,
+       normalizerVersion: 1,
++      scraperVersion: 1,
+     }
+   ).lean();
+ 
+diff --git a/src/services/scraper.service.js b/src/services/scraper.service.js
+index 9076be8..c871fe6 100644
+--- a/src/services/scraper.service.js
++++ b/src/services/scraper.service.js
+@@ -5,7 +5,7 @@ const scraperConfig = require("../config/scraper.config");
+ const logger = require("../utils/logger");
+ const { getCategories, getCategoryTree } = require("./category.service");
+ const { fetchProductListings } = require("../crawlers/listing.crawler");
+-const { fetchProductDetails } = require("../crawlers/product.crawler");
++const { fetchProductDetails, SCRAPER_VERSION } = require("../crawlers/product.crawler");
+ const normalizeProduct = require("../normalize/normalizeProduct");
+ const { canonicalUrl } = normalizeProduct;
+ const {
+@@ -138,7 +138,9 @@ await Promise.all(
+         const shouldScrape =
+           !existing ||
+           !existing.lastScrapedAt ||
+-          new Date(existing.lastScrapedAt).getTime() < staleTime;
++          new Date(existing.lastScrapedAt).getTime() < staleTime ||
++          // scraped before the crawler learned something new (e.g. options)
++          (existing.scraperVersion || 1) < SCRAPER_VERSION;
+ 
+         if (shouldScrape) {
+           productMap.set(product.url, product);
+diff --git a/test/variants.test.js b/test/variants.test.js
+new file mode 100644
+index 0000000..4109f03
+--- /dev/null
++++ b/test/variants.test.js
+@@ -0,0 +1,189 @@
++// Run with: npm test
++const test = require("node:test");
++const assert = require("node:assert/strict");
++const cheerio = require("cheerio");
++
++const { parseVariations } = require("../src/crawlers/variations");
++const normalizeVariants = require("../src/normalize/normalizeVariants");
++const normalizeProduct = require("../src/normalize/normalizeProduct");
++
++const variation = (id, weight, price, regular, extra = {}) => ({
++  variation_id: id,
++  attributes: { "attribute_pa_simple-weight": weight },
++  sku: "",
++  display_price: price,
++  display_regular_price: regular,
++  is_in_stock: true,
++  is_purchasable: true,
++  image: { full_src: `https://metrosports.co.in/img-${id}.png` },
++  ...extra,
++});
++
++// Trimmed copy of metrosports.co.in/product/everise-fitness-vinyl-dumbbells/
++const page = (variations) => `
++<form class="variations_form cart" data-product_id="12221"
++  data-product_variations="${JSON.stringify(variations).replace(/"/g, "&quot;")}">
++  <table class="variations"><tbody><tr>
++    <th class="label"><label for="pa_simple-weight">Weight</label></th>
++    <td class="value"><select id="pa_simple-weight" name="attribute_pa_simple-weight" data-attribute_name="attribute_pa_simple-weight">
++      <option value="">Choose an option</option>
++      <option value="0-5kg">0.5KG</option><option value="1kg">1KG</option><option value="2kg">2KG</option>
++    </select></td>
++  </tr></tbody></table>
++</form>`;
++
++const dumbbells = [
++  variation(7027, "0-5kg", 649, 650),
++  variation(7028, "1kg", 1299, 1300),
++  variation(7029, "2kg", 2599, 2600, { is_in_stock: false }),
++];
++
++test("reads option names, labels and every variation from the product page", () => {
++  const raw = parseVariations(cheerio.load(page(dumbbells)));
++  assert.equal(raw.productId, "12221");
++  assert.deepEqual(raw.options, [
++    {
++      key: "attribute_pa_simple-weight",
++      name: "Weight",
++      values: [
++        { value: "0-5kg", label: "0.5KG" },
++        { value: "1kg", label: "1KG" },
++        { value: "2kg", label: "2KG" },
++      ],
++    },
++  ]);
++  assert.equal(raw.variations.length, 3);
++  assert.deepEqual(raw.variations[1], {
++    id: "7028",
++    attributes: { "attribute_pa_simple-weight": "1kg" },
++    sku: "",
++    sellingPrice: 1299,
++    mrp: 1300,
++    inStock: true,
++    image: "https://metrosports.co.in/img-7028.png",
++  });
++});
++
++test("a simple product has no options", () => {
++  assert.equal(parseVariations(cheerio.load("<form class='cart'></form>")), null);
++});
++
++test("too many variations to embed: options are read, variations left to the Store API", () => {
++  const html = page(dumbbells).replace(/data-product_variations="[^"]*"/, 'data-product_variations="false"');
++  const raw = parseVariations(cheerio.load(html));
++  assert.equal(raw.variations, null);
++  assert.equal(raw.options[0].values.length, 3);
++});
++
++test("each option keeps its own price; labels are tidied", () => {
++  const { options, variants } = normalizeVariants(parseVariations(cheerio.load(page(dumbbells))));
++  assert.deepEqual(options, [{ name: "Weight", values: ["0.5 kg", "1 kg", "2 kg"] }]);
++  assert.deepEqual(
++    variants.map((v) => [v.variantId, v.label, v.sellingPrice, v.mrp, v.inStock]),
++    [
++      ["7027", "0.5 kg", 649, 650, true],
++      ["7028", "1 kg", 1299, 1300, true],
++      ["7029", "2 kg", 2599, 2600, false],
++    ]
++  );
++  assert.deepEqual(variants[0].options, { Weight: "0.5 kg" });
++});
++
++test("'any value' variations become one entry per value at the same price", () => {
++  const raw = {
++    options: [
++      { key: "attribute_size", name: "Size", values: [{ value: "S", label: "S" }, { value: "M", label: "M" }] },
++      { key: "attribute_colour", name: "colour", values: [{ value: "Red", label: "RED" }, { value: "Blue", label: "BLUE" }] },
++    ],
++    variations: [
++      { id: "1", attributes: { attribute_size: "S", attribute_colour: "" }, sellingPrice: 100, mrp: 120, inStock: true },
++      { id: "2", attributes: { attribute_size: "M", attribute_colour: "Blue" }, sellingPrice: 150, mrp: 0, inStock: true },
++    ],
++  };
++  const { options, variants } = normalizeVariants(raw);
++  assert.deepEqual(options, [
++    { name: "Size", values: ["S", "M"] },
++    { name: "Colour", values: ["Red", "Blue"] },
++  ]);
++  assert.deepEqual(
++    variants.map((v) => [v.variantId, v.label, v.sellingPrice, v.mrp]),
++    [
++      ["1-1", "S / Red", 100, 120],
++      ["1-2", "S / Blue", 100, 120],
++      ["2", "M / Blue", 150, 150],
++    ]
++  );
++});
++
++test("options without prices are dropped and reported", () => {
++  const raw = { options: [{ key: "a", name: "Size", values: [{ value: "x", label: "X" }] }], variations: null };
++  const result = normalizeVariants(raw);
++  assert.deepEqual(result.variants, []);
++  assert.deepEqual(result.issues, ["warn:options_without_prices"]);
++});
++
++test("product price is the cheapest option in stock, with that option's MRP", () => {
++  const raw = parseVariations(
++    cheerio.load(page([variation(1, "0-5kg", 649, 900, { is_in_stock: false }), variation(2, "1kg", 1299, 1300), variation(3, "2kg", 4799, 5000)]))
++  );
++  const product = normalizeProduct({
++    supplier: "metrosports",
++    url: "https://metrosports.co.in/product/vinyl/",
++    name: "Everise Fitness Vinyl Dumbbells",
++    brand: "Everise Fitness",
++    sellingPrice: 649,
++    mrp: null,
++    images: ["https://metrosports.co.in/a.jpg"],
++    descriptionText: "Hello",
++    sourceOptions: raw,
++  });
++  assert.equal(product.sellingPrice, 1299);
++  assert.equal(product.mrp, 1300);
++  assert.equal(product.maxPrice, 4799);
++  assert.equal(product.variants.length, 3);
++  assert.ok(product.dataIssues.includes("fixed:price_from_options"));
++});
++
++test("products without options are unchanged", () => {
++  const product = normalizeProduct({
++    url: "https://metrosports.co.in/product/x/",
++    name: "Bench",
++    sellingPrice: 900,
++    mrp: 1000,
++    images: ["https://metrosports.co.in/a.jpg"],
++  });
++  assert.deepEqual([product.sellingPrice, product.mrp, product.maxPrice], [900, 1000, 900]);
++  assert.deepEqual(product.options, []);
++  assert.deepEqual(product.variants, []);
++});
++
++test("weights are listed in number order, not Metro's alphabetical order", () => {
++  const values = ["10KG X 1 PAIR", "12.5KG X 1 PAIR", "2.5KG X 1 PAIR", "5KG X 1 PAIR"];
++  const raw = {
++    options: [{ key: "w", name: "WEIGHT", values: values.map((label, i) => ({ value: `v${i}`, label })) }],
++    variations: values.map((_, i) => ({ id: String(i), attributes: { w: `v${i}` }, sellingPrice: 100 + i, mrp: 0 })),
++  };
++  const { options, variants } = normalizeVariants(raw);
++  assert.deepEqual(options, [{ name: "Weight", values: ["2.5 kg x 1 Pair", "5 kg x 1 Pair", "10 kg x 1 Pair", "12.5 kg x 1 Pair"] }]);
++  assert.deepEqual(variants.map((v) => v.label), options[0].values);
++});
++
++test("messy option names are tidied", () => {
++  const { cleanOptionName } = normalizeVariants;
++  assert.equal(cleanOptionName("size-38mm"), "Size 38mm");
++  assert.equal(cleanOptionName("SIZE IN INCH"), "Size in Inch");
++  assert.equal(cleanOptionName("COLOUR"), "Colour");
++});
++
++test("clothing sizes go small to large; units are tidied", () => {
++  const raw = (labels) => ({
++    options: [{ key: "s", name: "Size", values: labels.map((label, i) => ({ value: `v${i}`, label })) }],
++    variations: labels.map((_, i) => ({ id: String(i), attributes: { s: `v${i}` }, sellingPrice: 100, mrp: 0 })),
++  });
++  assert.deepEqual(normalizeVariants(raw(["Extra Large", "Large", "Medium", "Small", "XS"])).options[0].values, [
++    "XS", "Small", "Medium", "Large", "Extra Large",
++  ]);
++  assert.deepEqual(normalizeVariants(raw(["15Mtrs", "12mtrs", "85Cms", "1.0 KG X 1 PAIR"])).options[0].values, [
++    "1 kg x 1 Pair", "12 m", "15 m", "85 cm",
++  ]);
++});

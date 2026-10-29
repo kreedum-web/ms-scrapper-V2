@@ -5,7 +5,7 @@ const scraperConfig = require("../config/scraper.config");
 const logger = require("../utils/logger");
 const { getCategories, getCategoryTree } = require("./category.service");
 const { fetchProductListings } = require("../crawlers/listing.crawler");
-const { fetchProductDetails } = require("../crawlers/product.crawler");
+const { fetchProductDetails, SCRAPER_VERSION } = require("../crawlers/product.crawler");
 const normalizeProduct = require("../normalize/normalizeProduct");
 const { canonicalUrl } = normalizeProduct;
 const {
@@ -138,7 +138,9 @@ await Promise.all(
         const shouldScrape =
           !existing ||
           !existing.lastScrapedAt ||
-          new Date(existing.lastScrapedAt).getTime() < staleTime;
+          new Date(existing.lastScrapedAt).getTime() < staleTime ||
+          // scraped before the crawler learned something new (e.g. options)
+          (existing.scraperVersion || 1) < SCRAPER_VERSION;
 
         if (shouldScrape) {
           productMap.set(product.url, product);

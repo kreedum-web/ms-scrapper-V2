@@ -122,4 +122,5 @@ module.exports = {
   cleanLine,
   cleanBlock,
   fixAllCaps,
+  ACRONYMS,
 };

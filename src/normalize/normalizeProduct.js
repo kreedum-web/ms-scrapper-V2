@@ -9,6 +9,8 @@
  *   brand          brand pages       -> one canonical spelling, resolved from several sources
  *   categorySlug   category tree     -> the product's node in Metro's menu tree (+ categoryPath)
  *   mrp/sellingPrice  prices         -> positive numbers, mrp >= sellingPrice
+ *   options/variants  weight, size … -> each option with its own price; the
+ *                                      product price is the cheapest option
  *   features       specs + highlights -> bullets, then "Key: Value" with canonical keys
  *   description    -> product content only (no FAQ, Metro selling, phone, staff
  *                     notes, HTML junk); spec lines moved to specs; shortDescription
@@ -23,10 +25,12 @@ const detectBrand = require("../utils/detectBrand");
 const chooseCategory = require("./chooseCategory");
 const skuFromName = require("./skuFromName");
 const cleanDescription = require("./cleanDescription");
+const normalizeVariants = require("./normalizeVariants");
+const { priceFromVariants } = normalizeVariants;
 const { lookup: keyLookup, dropKeys } = require("../config/featureKeys");
 const { cleanLine, fixAllCaps } = require("./text");
 
-const NORMALIZER_VERSION = 1;
+const NORMALIZER_VERSION = 2; // 2: options / variants
 
 // ---------------------------------------------------------------- URL
 
@@ -309,6 +313,16 @@ function normalizeProduct(raw, options = {}) {
     fixed("mrp_below_selling_price");
   }
 
+  // ---- options (weight, size …): each has its own price
+  const { options: productOptions, variants, issues: variantIssues } = normalizeVariants(raw.sourceOptions);
+  issues.push(...variantIssues);
+  let maxPrice = sellingPrice;
+  const optionPrice = priceFromVariants(variants);
+  if (optionPrice) {
+    if (optionPrice.sellingPrice !== sellingPrice || optionPrice.mrp !== mrp) fixed("price_from_options");
+    ({ sellingPrice, mrp, maxPrice } = optionPrice);
+  }
+
   // ---- description
   // The HTML is the source; the text is rebuilt from the cleaned HTML so both match.
   let description = cleanDescription(raw.descriptionHtml);
@@ -362,6 +376,9 @@ function normalizeProduct(raw, options = {}) {
     categoryPath,
     mrp,
     sellingPrice,
+    maxPrice: maxPrice || sellingPrice,
+    options: productOptions,
+    variants,
     currency: raw.currency || "INR",
     descriptionHtml,
     descriptionText,

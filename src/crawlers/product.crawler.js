@@ -1,6 +1,12 @@
 const cheerio = require("cheerio");
 const request = require("../utils/request");
 const { htmlToText } = require("../normalize/text");
+const { parseVariations, fetchVariationsFromStoreApi } = require("./variations");
+const logger = require("../utils/logger");
+
+// Bump when the crawler starts reading something new from product pages:
+// products scraped by an older version are re-scraped on the next sync.
+const SCRAPER_VERSION = 2; // 2: product options (weight, size …) with their own prices
 
 function cleanText(text = "") {
   return text.replace(/\s+/g, " ").trim();
@@ -62,14 +68,37 @@ $("table.woocommerce-product-attributes tr").each((_, row) => {
 
   // ---------------- PRICE ----------------
 
+  // Only the product's own price box (<p class="price">). Related products
+  // further down the page have prices too; when Metro shows no price for
+  // this product (not for sale / price on request) we must not pick theirs.
+  const priceBox = $("p.price").first();
+
   const mrp = parsePrice(
-    $(".price del .amount").first().text()
+    priceBox.find("del .amount").first().text()
   );
 
   const sellingPrice = parsePrice(
-    $(".price ins .amount").first().text() ||
-      $(".price .amount").first().text()
+    priceBox.find("ins .amount").first().text() ||
+      priceBox.find(".amount").first().text()
   );
+
+  // ---------------- OPTIONS ----------------
+  // Weight / size / … each with its own price. For these products the price
+  // above is only the cheapest option; normalizeProduct() sets the prices
+  // from the options.
+  const sourceOptions = parseVariations($);
+
+  if (sourceOptions && !sourceOptions.variations && sourceOptions.productId) {
+    try {
+      sourceOptions.variations = await fetchVariationsFromStoreApi(
+        product.url,
+        sourceOptions.productId,
+        sourceOptions.options
+      );
+    } catch (error) {
+      logger.warn(`Options not loaded for ${product.url}: ${error.message}`);
+    }
+  }
 
  
 
@@ -187,6 +216,8 @@ return {
   images,
   thumbnail,
   specifications,
+  sourceOptions: sourceOptions || null,
+  scraperVersion: SCRAPER_VERSION,
   lastScrapedAt: new Date(),
   lastError: null,
 };
@@ -197,4 +228,5 @@ return {
 
 module.exports = {
   fetchProductDetails,
+  SCRAPER_VERSION,
 };

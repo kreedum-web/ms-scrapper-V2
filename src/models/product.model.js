@@ -74,9 +74,33 @@ const productSchema = new mongoose.Schema(
 
     sellingPrice: Number,
 
+    // Highest option price ("₹649 – ₹4,799"); equals sellingPrice without options.
+    maxPrice: Number,
+
     currency: {
       type: String,
       default: "INR",
+    },
+
+    // ---------- OPTIONS (weight, size …) ----------
+    // [{ name: "Weight", values: ["0.5 kg", "1 kg"] }]
+    options: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: [],
+    },
+
+    // One per option combination, each with its own price:
+    // [{ variantId, options: { Weight: "1 kg" }, label, sku, mrp, sellingPrice, inStock, image }]
+    // variantId is Metro's variation id (stable across scrapes).
+    variants: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: [],
+    },
+
+    // Options exactly as scraped from WooCommerce (re-normalized by `npm run normalize`).
+    sourceOptions: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
     },
 
     // Earlier URLs of this product (Metro renamed it and left a 301 redirect).
@@ -130,6 +154,9 @@ const productSchema = new mongoose.Schema(
     },
 
     lastScrapedAt: Date,
+
+    // Crawler version that scraped this product (see product.crawler.js).
+    scraperVersion: Number,
 
     removedAt: {
       type: Date,

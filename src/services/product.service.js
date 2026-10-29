@@ -113,6 +113,7 @@ async function getExistingProducts(supplier = "metrosports") {
       removedAt: 1,
       categorySlug: 1,
       normalizerVersion: 1,
+      scraperVersion: 1,
     }
   ).lean();
 
