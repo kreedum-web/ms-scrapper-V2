@@ -11,12 +11,14 @@ before it is saved, so `kreedum_supplier_sync.products` always matches what
 | `url` | `https://`, trailing slash, no query/hash (it's the backend's upsert key) |
 | `name` | clean title; selling points after ` I ` / ` \| ` move to `features`; ALL-CAPS titles title-cased. Original kept in `sourceName` |
 | `brand` | one canonical spelling, from spec table → name → `AF-` SKU (`src/config/brandDictionary.js`) |
-| `sku` | real SKU or `""` (never `N/A`) |
+| `sku` | Metro's SKU; if Metro has none, the model code from the name (`Aerofit AF-2952 …` → `AF-2952`); otherwise `""` (never `N/A`) |
 | `categorySlug` | one slug from the backend's `categoryMap` (`src/config/backendCategories.js`), chosen deterministically when a product is in several categories |
 | `mrp`, `sellingPrice` | positive numbers, `mrp >= sellingPrice` |
 | `features` | bullets, then `Key: Value` lines with canonical keys (`Max User Weight`, `Dimensions`, `Weight`, `Warranty`… in `src/config/featureKeys.js`) — the spec table is merged in here because the backend only reads `features` |
 | `descriptionText/Html` | no `Specifications :` heading, no `[Intern: …]` supplier notes |
 | `dataIssues` | `error:*` / `warn:*` / `fixed:*` codes. Find problems with `db.products.find({ dataIssues: /^error:/ })` |
+
+**Products with no images** (Metro shows only its placeholder picture) are treated as discontinued: the sync never saves them, and an existing copy is marked inactive.
 
 **Re-clean data that's already in MongoDB** (no re-scrape needed):
 

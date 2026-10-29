@@ -19,6 +19,7 @@
  */
 const detectBrand = require("../utils/detectBrand");
 const chooseCategory = require("./chooseCategory");
+const skuFromName = require("./skuFromName");
 const { lookup: keyLookup, dropKeys } = require("../config/featureKeys");
 const { cleanLine, cleanBlock, fixAllCaps, stripInternalNotes, htmlToText } = require("./text");
 
@@ -230,6 +231,8 @@ function cleanImages(images = [], thumbnail) {
   for (const raw of [...(images || []), thumbnail]) {
     const src = cleanLine(raw || "");
     if (!/^https?:\/\//i.test(src)) continue;
+    // WooCommerce's grey "no image" picture is not a product photo.
+    if (/woocommerce-placeholder/i.test(src)) continue;
     if (!out.includes(src)) out.push(src);
   }
   return out;
@@ -267,8 +270,13 @@ function normalizeProduct(raw, options = {}) {
   name = capsFixed;
 
   // ---- sku
-  const sku = cleanSku(raw.sku);
+  let sku = cleanSku(raw.sku);
   if (raw.sku && !sku) fixed("sku_placeholder_removed");
+  // No SKU on Metro: use the model code from the name ("Aerofit AF-2952 ..." -> "AF-2952").
+  if (!sku) {
+    sku = skuFromName(name);
+    if (sku) fixed("sku_from_name");
+  }
 
   // ---- brand (needs the cleaned name)
   const { brand, source: brandSource } = detectBrand({
@@ -351,7 +359,9 @@ function normalizeProduct(raw, options = {}) {
   if (tree && !node) issues.push(`error:category_not_in_menu:${categorySlug || "none"}`);
   if (!brand) issues.push("warn:no_brand");
   if (!sku) issues.push("warn:no_sku");
-  if (!images.length) issues.push("warn:no_images");
+  // Metro shows only a placeholder picture: discontinued / not a real product.
+  // The sync never saves these (see scraper.service.js).
+  if (!images.length) issues.push("error:no_images");
   if (!descriptionText && !features.length) issues.push("warn:no_content");
 
   return {

@@ -19,8 +19,11 @@ async function saveProductBatch(products) {
     };
   }
 
-  const scraped = products.filter((product) => !product.failed);
+  const scraped = products.filter((product) => !product.failed && !product.rejected);
   const failed = products.filter((product) => product.failed);
+  // Rejected by a quality rule (e.g. no images): never inserted; an existing
+  // copy is taken off the site by marking it inactive.
+  const rejected = products.filter((product) => product.rejected);
 
   // Find products that were inactive before this sync
   const reactivated = await Product.countDocuments({
@@ -55,13 +58,27 @@ async function saveProductBatch(products) {
         update: { $set: { lastError: product.lastError } },
       },
     })),
+
+    ...rejected.map((product) => ({
+      updateOne: {
+        filter: { url: product.url },
+        update: {
+          $set: {
+            status: "inactive",
+            removedAt: new Date(),
+            lastError: product.lastError,
+            lastScrapedAt: new Date(),
+          },
+        },
+      },
+    })),
   ];
 
   // ordered:false so one bad document doesn't stop the rest of the batch.
   const result = await Product.bulkWrite(operations, { ordered: false });
 
   logger.info(
-    `Batch Saved: ${result.upsertedCount} new | ${result.modifiedCount} updated | ${failed.length} failed`
+    `Batch Saved: ${result.upsertedCount} new | ${result.modifiedCount} updated | ${failed.length} failed | ${rejected.length} rejected`
   );
 
   return {

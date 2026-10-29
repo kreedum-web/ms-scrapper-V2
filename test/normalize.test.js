@@ -218,3 +218,39 @@ test("menu parser builds Metro's tree from the menu HTML", () => {
   assert.equal(bySlug.flooring.kind, "department");
   assert.equal(bySlug["store-locations"], undefined);
 });
+
+test("SKU comes from the model code in the name when Metro has none", () => {
+  const skuFromName = require("../src/normalize/skuFromName");
+  const cases = {
+    "Aerofit AF-2952 Rowing Lat Pull Down": "AF-2952",
+    "Aerofit AF 5114 High Row Machine": "AF-5114",
+    "Aerofit AF-11PR Weight Plate Rack": "AF-11PR",
+    "Aerofit AF-T12 Premium T-Series Commercial Elliptical Cross Trainer": "AF-T12",
+    "Xpeed XP- 2481 Aerobic Stepper Pro": "XP-2481",
+    "Powermax Fitness TAC-225® Motorized Treadmill with Auto Incline": "TAC-225",
+    "USI 706FSL Free Standing Punch and Kick Bag": "706FSL",
+    "Concept2 SkiErg2 Wall Mounted 2715": "2715",
+    // no reliable code -> empty
+    "Aerofit Black Cat Barbell A2 Series with High-Quality Steel Construction": "",
+    "Aerofit Beast 2.0 Barbell B1 Series": "",
+    "Chrome Plates 28 mm": "",
+    "Olympic Rod Max Weight (125 kg) with Corrosion Resistant Surface": "",
+    "Aerofit Weight Lifting Platform-3 / Dead Lift Platform 8X4": "",
+  };
+  for (const [name, sku] of Object.entries(cases)) assert.equal(skuFromName(name), sku, name);
+
+  const p = run({ name: "Aerofit AF-2952 Rowing Lat Pull Down", sku: "" });
+  assert.equal(p.sku, "AF-2952");
+  assert.ok(p.dataIssues.includes("fixed:sku_from_name"));
+  // Metro's own SKU always wins
+  assert.equal(run({ name: "Aerofit AF-4306 Vertical Press", sku: "AF-9935" }).sku, "AF-9935");
+});
+
+test("placeholder picture is not an image; no images is an error", () => {
+  const p = run({
+    images: ["https://metrosports.co.in/wp-content/uploads/woocommerce-placeholder-600x600.webp"],
+    thumbnail: null,
+  });
+  assert.deepEqual(p.images, []);
+  assert.ok(p.dataIssues.includes("error:no_images"));
+});

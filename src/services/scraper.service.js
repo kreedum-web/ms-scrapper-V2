@@ -58,6 +58,7 @@ let processed = syncRun.productsScraped || 0;
 let removed =0;
 let reactivated=0;
 let failedProducts = 0;
+let rejectedProducts = 0;
   let completedCategories = 0;
 
   const STALE_HOURS = 24;
@@ -229,6 +230,18 @@ if (productsToScrape.length === 0) {
                 categoryTree,
               });
 
+              // No real photo on Metro (only the placeholder): discontinued or
+              // not a real product. Never save it.
+              if (!normalized.images.length) {
+                rejectedProducts++;
+                logger.warn(`🚫 Skipped (no images): ${product.slug}`);
+                return {
+                  url: product.url,
+                  rejected: true,
+                  lastError: "Rejected: no images on Metro Sports",
+                };
+              }
+
               const errors = normalized.dataIssues.filter((issue) =>
                 issue.startsWith("error:")
               );
@@ -368,6 +381,7 @@ logger.info(`Updated          : ${updated}`);
 logger.info(`Removed          : ${removed}`);
 logger.info(`Reactivated      : ${reactivated}`);
 logger.info(`Failed           : ${failedProducts}`);
+logger.info(`Rejected (no img): ${rejectedProducts}`);
 
 logger.info("------------------------------------");
 

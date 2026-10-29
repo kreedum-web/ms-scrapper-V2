@@ -8,7 +8,6 @@ dns.setDefaultResultOrder("ipv4first");
 
 async function connectDB() {
   try {
-    console.log("DB URI =", process.env.MONGODB_URI);
     await mongoose.connect(process.env.MONGODB_URI, {
       dbName: "kreedum_supplier_sync",
       serverSelectionTimeoutMS: 15000,
